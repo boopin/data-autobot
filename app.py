@@ -3,29 +3,23 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 
-# Helper function to clean table names for SQLite
 def clean_table_name(name):
     return name.strip().replace(" ", "_").lower()
 
-# Preprocess data for aggregations
 def preprocess_data(df):
     df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
 
-# Create aggregations
 def create_aggregations(df, table_name, conn):
     if "date" in df.columns:
-        # Add month, quarter, and week columns
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
         df["week"] = df["date"].dt.to_period("W").astype(str)
         
-        # Save original table
         df.to_sql(table_name, conn, index=False, if_exists="replace")
         
-        # Save aggregated tables
         for period, agg_name in [("week", f"{table_name}_weekly"),
                                  ("month", f"{table_name}_monthly"),
                                  ("quarter", f"{table_name}_quarterly")]:
@@ -34,16 +28,19 @@ def create_aggregations(df, table_name, conn):
     else:
         df.to_sql(table_name, conn, index=False, if_exists="replace")
 
-# Main Streamlit App
+def fetch_schema(table_name, conn):
+    schema_query = f"PRAGMA table_info({table_name});"
+    schema_info = pd.read_sql_query(schema_query, conn)
+    return schema_info["name"].tolist()
+
 def main():
-    st.title("Data Autobot - Analyze Your Data")
+    st.title("Data Autobot - Analyze and Compare")
     
-    # File uploader
     uploaded_file = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])
     
     if uploaded_file:
         try:
-            conn = sqlite3.connect(":memory:")  # In-memory SQLite database
+            conn = sqlite3.connect(":memory:")
             table_names = []
 
             if uploaded_file.name.endswith(".xlsx"):
@@ -60,46 +57,56 @@ def main():
                 table_name = clean_table_name(uploaded_file.name.replace(".csv", ""))
                 create_aggregations(df, table_name, conn)
                 table_names.append(table_name)
-            else:
-                st.error("Unsupported file format. Please upload an Excel or CSV file.")
-                return
-            
-            st.success("File successfully processed and saved to the database!")
 
-            # Dropdown for table selection
+            st.success("File successfully processed and saved to the database!")
             selected_table = st.selectbox("Select a Table for Analysis", table_names)
 
             if selected_table:
-                # Check if the selected table has a date column
-                try:
-                    columns_info = pd.read_sql_query(f"PRAGMA table_info({selected_table})", conn)
-                    available_columns = columns_info["name"].tolist()
-                except Exception as e:
-                    st.error(f"Error fetching schema for table '{selected_table}': {e}")
-                    return
-
+                available_columns = fetch_schema(selected_table, conn)
                 if "date" in available_columns:
                     st.write("### Aggregation Options")
                     period = st.selectbox("Select Aggregation Period", ["Original", "Weekly", "Monthly", "Quarterly"])
                     if period != "Original":
                         selected_table = f"{selected_table}_{period.lower()}"
 
-                # Allow user to select columns and filters
                 st.write("### Query Builder")
                 if available_columns:
                     selected_columns = st.multiselect("Select Columns to Display", available_columns, default=available_columns)
-                    if selected_columns:
-                        limit = st.number_input("Number of Records to Display", min_value=1, max_value=100, value=10)
-                        sql_query = f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT {limit}"
-                        
-                        st.write("Generated Query:", sql_query)
-                        query_result = pd.read_sql_query(sql_query, conn)
-                        st.dataframe(query_result)
-                    else:
-                        st.warning("Please select at least one column to display.")
-                else:
-                    st.warning("No columns available for selection. Please check the uploaded file.")
+                    limit = st.number_input("Number of Records to Display", min_value=1, max_value=100, value=10)
+                    
+                    sql_query = f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT {limit}"
+                    st.write("Generated Query:", sql_query)
+                    query_result = pd.read_sql_query(sql_query, conn)
+                    st.dataframe(query_result)
 
+                    # Comparison Options
+                    st.write("### Comparison Mode")
+                    comparison_toggle = st.checkbox("Enable Comparison")
+                    if comparison_toggle:
+                        compare_period = st.radio("Compare by", ["Weekly", "Monthly", "Quarterly"])
+                        compare_table = f"{selected_table}_{compare_period.lower()}"
+                        compare_options = pd.read_sql_query(f"SELECT DISTINCT {compare_period.lower()} FROM {compare_table}", conn)[compare_period.lower()]
+                        
+                        if len(compare_options) > 1:
+                            period1 = st.selectbox("Select First Period", compare_options)
+                            period2 = st.selectbox("Select Second Period", compare_options)
+                            
+                            if period1 and period2:
+                                comparison_query = f"""
+                                SELECT SUM(impressions_total) as total, '{period1}' as period 
+                                FROM {compare_table} WHERE {compare_period.lower()} = '{period1}'
+                                UNION ALL
+                                SELECT SUM(impressions_total) as total, '{period2}' as period 
+                                FROM {compare_table} WHERE {compare_period.lower()} = '{period2}'
+                                """
+                                st.write("Generated Comparison Query:", comparison_query)
+                                comparison_result = pd.read_sql_query(comparison_query, conn)
+                                comparison_result["change_%"] = comparison_result["total"].pct_change() * 100
+                                st.dataframe(comparison_result)
+                        else:
+                            st.warning("Not enough data for comparison.")
+                else:
+                    st.warning("No columns available for selection.")
         except Exception as e:
             st.error(f"Error loading file: {e}")
     else:
