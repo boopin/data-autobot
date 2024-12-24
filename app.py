@@ -1,102 +1,99 @@
-# App Version: 2.0.0
 import streamlit as st
 import pandas as pd
 import sqlite3
-import plotly.express as px
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
+from datetime import datetime
 
-# Configure app
-st.set_page_config(page_title="Data Analytics Aggregator", layout="wide")
+# Initialize Streamlit app
+st.title("Data Analysis Tool")
 
 def preprocess_data(df):
-    """Clean and preprocess data for easier handling."""
-    df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    """Preprocess the DataFrame for SQL operations."""
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace("(", "").str.replace(")", "")
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
 
 def create_aggregations(df, table_name, conn):
-    """Create weekly, monthly, and quarterly aggregations."""
-    if 'date' in df.columns:
-        df['week'] = df['date'].dt.to_period('W').apply(lambda r: r.start_time)
-        df['month'] = df['date'].dt.to_period('M').apply(lambda r: r.start_time)
-        df['quarter'] = df['date'].dt.to_period('Q').apply(lambda r: r.start_time)
+    """
+    Create aggregated tables (weekly, monthly, quarterly) and save them to the database.
+    """
+    if "date" not in df.columns:
+        return  # Skip if there is no 'date' column
+    
+    # Ensure the 'date' column is datetime
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if df["date"].isnull().all():
+        raise ValueError("The 'date' column contains no valid datetime values.")
+    
+    periods = {
+        "weekly": df["date"].dt.to_period("W").dt.start_time,
+        "monthly": df["date"].dt.to_period("M").dt.start_time,
+        "quarterly": df["date"].dt.to_period("Q").dt.start_time,
+    }
+    
+    for period, period_values in periods.items():
+        agg_df = df.copy()
+        agg_df["period"] = period_values
+        numeric_columns = agg_df.select_dtypes(include=["number"]).columns
+        agg_df = agg_df.groupby("period")[numeric_columns].sum().reset_index()
+        table_name_agg = f"{table_name}_{period}"
+        agg_df.to_sql(table_name_agg, conn, index=False, if_exists="replace")
 
-        for period in ['week', 'month', 'quarter']:
-            agg_table_name = f"{table_name}_{period}"
-            agg_df = df.groupby(period).sum().reset_index()
-            agg_df.to_sql(agg_table_name, conn, index=False, if_exists="replace")
-
-def get_table_schema(conn, table_name):
-    """Fetch schema of the selected table."""
-    query = f"PRAGMA table_info({table_name});"
-    schema_info = pd.read_sql(query, conn)
-    return schema_info
-
-def generate_query(table_name, columns, date_filter=None, limit=None):
-    """Build SQL query dynamically."""
-    base_query = f"SELECT {', '.join(columns)} FROM {table_name}"
-    where_clause = f"WHERE {date_filter}" if date_filter else ""
-    order_clause = f"ORDER BY {columns[-1]} DESC" if len(columns) > 1 else ""
-    limit_clause = f"LIMIT {limit}" if limit else ""
-    query = f"{base_query} {where_clause} {order_clause} {limit_clause};"
-    return query
-
-# Streamlit app layout
 def main():
-    st.title("Data Analytics Aggregator")
-
+    st.subheader("Upload Data Files")
     uploaded_file = st.file_uploader("Upload your CSV or Excel file", type=["csv", "xlsx"])
-    if not uploaded_file:
-        st.info("Please upload a file to start analysis.")
-        return
+    if uploaded_file:
+        try:
+            conn = sqlite3.connect(":memory:")
+            table_names = []
 
-    conn = sqlite3.connect(":memory:")
+            if uploaded_file.name.endswith(".xlsx"):
+                excel_data = pd.ExcelFile(uploaded_file)
+                for sheet in excel_data.sheet_names:
+                    df = pd.read_excel(excel_data, sheet_name=sheet)
+                    df = preprocess_data(df)
+                    table_name = sheet.lower().replace(" ", "_")
+                    df.to_sql(table_name, conn, index=False, if_exists="replace")
+                    create_aggregations(df, table_name, conn)
+                    table_names.append(table_name)
 
-    if uploaded_file.name.endswith('.xlsx'):
-        excel_data = pd.ExcelFile(uploaded_file)
-        sheet_names = excel_data.sheet_names
-        st.write("Available Sheets:", sheet_names)
-        
-        for sheet in sheet_names:
-            df = pd.read_excel(uploaded_file, sheet_name=sheet)
-            df = preprocess_data(df)
-            table_name = sheet.lower().replace(" ", "_")
-            df.to_sql(table_name, conn, index=False, if_exists="replace")
-            create_aggregations(df, table_name, conn)
-    elif uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-        df = preprocess_data(df)
-        table_name = uploaded_file.name.lower().replace(".csv", "").replace(" ", "_")
-        df.to_sql(table_name, conn, index=False, if_exists="replace")
-        create_aggregations(df, table_name, conn)
+            elif uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+                df = preprocess_data(df)
+                table_name = uploaded_file.name.replace(".csv", "").lower().replace(" ", "_")
+                df.to_sql(table_name, conn, index=False, if_exists="replace")
+                create_aggregations(df, table_name, conn)
+                table_names.append(table_name)
+            
+            st.success("File successfully processed and saved to the database!")
+            st.write("Available Tables:", table_names)
 
-    st.success("File successfully processed and saved to the database!")
+            selected_table = st.selectbox("Select a table for analysis", table_names)
+            if selected_table:
+                schema_query = f"PRAGMA table_info({selected_table});"
+                schema_info = pd.read_sql_query(schema_query, conn)
+                st.write("Schema Information:")
+                st.dataframe(schema_info)
 
-    table_names = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn)
-    selected_table = st.selectbox("Select a table to analyze:", table_names["name"])
+                st.subheader("Build Your Query")
+                columns = schema_info["name"].tolist()
+                date_range = st.selectbox("Select Date Range", ["Weekly", "Monthly", "Quarterly", "Custom"])
+                metrics = st.multiselect("Select Metrics", columns)
+                top_n = st.selectbox("Select Top N Rows", [5, 10, 25, 50])
 
-    if selected_table:
-        schema_info = get_table_schema(conn, selected_table)
-        st.write("Table Schema:", schema_info)
+                if st.button("Run Query"):
+                    period_table = f"{selected_table}_{date_range.lower()}"
+                    query = f"SELECT {', '.join(metrics)} FROM {period_table} ORDER BY {metrics[-1]} DESC LIMIT {top_n}"
+                    st.write("Generated Query:", query)
+                    try:
+                        result = pd.read_sql_query(query, conn)
+                        st.write("Query Result:")
+                        st.dataframe(result)
+                    except Exception as e:
+                        st.error(f"Query failed: {e}")
 
-        # Dropdowns for query building
-        date_column = st.selectbox("Select Date Column", schema_info["name"][schema_info["name"].str.contains('date')])
-        selected_columns = st.multiselect("Select Columns to Analyze", schema_info["name"])
-        top_n = st.selectbox("Number of Records", [5, 10, 25, 50])
-
-        if st.button("Run Query"):
-            if not selected_columns:
-                st.error("Please select at least one column for analysis.")
-            else:
-                query = generate_query(selected_table, selected_columns, date_filter=None, limit=top_n)
-                st.info(f"Generated Query:\n{query}")
-                try:
-                    result = pd.read_sql(query, conn)
-                    st.write("Query Results:", result)
-                except Exception as e:
-                    st.error(f"Error running query: {e}")
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
 
 if __name__ == "__main__":
     main()
