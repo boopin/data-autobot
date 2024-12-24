@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 def safe_table_name(table_name):
     """Properly format the table name for SQLite queries."""
-    return f'"{table_name.replace(\'"\', "")}"'  # Remove any existing quotes and apply valid SQLite quoting
+    return f'"{table_name.replace("\"", "")}"'  # Properly escape double quotes for valid SQLite quoting
 
 
 def load_file_to_db(uploaded_file, conn):
