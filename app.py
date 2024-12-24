@@ -29,7 +29,7 @@ def create_aggregations(df, table_name, conn):
 
 # Main App Functionality
 def main():
-    st.title("Data Analysis Dashboard")
+    st.title("Data Analysis Dashboard with Comparison")
 
     uploaded_file = st.file_uploader("Upload Excel or CSV", type=["xlsx", "csv"])
     if not uploaded_file:
@@ -64,6 +64,13 @@ def main():
         selected_table = st.selectbox("Select a table for analysis", table_names)
 
         date_range = st.selectbox("Select Date Range", ["Daily", "Weekly", "Monthly", "Quarterly", "Custom"])
+        comparison_mode = st.checkbox("Enable Comparison")
+
+        if comparison_mode:
+            st.subheader("Select Periods for Comparison")
+            period_1 = st.selectbox("Select First Period", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+            period_2 = st.selectbox("Select Second Period", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+
         if date_range == "Custom":
             start_date = st.date_input("Start Date")
             end_date = st.date_input("End Date")
@@ -81,16 +88,35 @@ def main():
             if date_range == "Custom" and start_date and end_date:
                 where_clause = f"WHERE date BETWEEN '{start_date}' AND '{end_date}'"
 
+            # Fix table suffix for aggregated data
             table_suffix = {"Weekly": "_weekly", "Monthly": "_monthly", "Quarterly": "_quarterly"}.get(date_range, "")
             query_table = f"{selected_table}{table_suffix}"
 
-            try:
-                sql_query = f"SELECT {', '.join(selected_columns)} FROM {query_table} {where_clause} ORDER BY {order_column} DESC LIMIT {limit}"
-                st.info(f"Generated Query: {sql_query}")
+            # Fix time column name for ordering
+            time_column = "date" if date_range == "Daily" else ("month" if date_range == "Monthly" else "quarter" if date_range == "Quarterly" else "week")
+            if date_range != "Custom" and time_column not in available_columns:
+                st.error(f"The table does not support {date_range} aggregation.")
+                return
 
-                result = pd.read_sql(sql_query, conn)
-                st.write("### Query Results")
-                st.dataframe(result)
+            try:
+                if comparison_mode:
+                    sql_query_1 = f"SELECT SUM({order_column}) as total, '{period_1}' as period FROM {query_table} WHERE quarter = '{period_1}'"
+                    sql_query_2 = f"SELECT SUM({order_column}) as total, '{period_2}' as period FROM {query_table} WHERE quarter = '{period_2}'"
+                    st.info(f"Generated Queries:\n{sql_query_1}\n{sql_query_2}")
+
+                    result_1 = pd.read_sql(sql_query_1, conn)
+                    result_2 = pd.read_sql(sql_query_2, conn)
+
+                    comparison_result = pd.concat([result_1, result_2])
+                    st.write("### Comparison Results")
+                    st.dataframe(comparison_result)
+                else:
+                    sql_query = f"SELECT {', '.join(selected_columns)} FROM {query_table} {where_clause} ORDER BY {order_column} DESC LIMIT {limit}"
+                    st.info(f"Generated Query: {sql_query}")
+
+                    result = pd.read_sql(sql_query, conn)
+                    st.write("### Query Results")
+                    st.dataframe(result)
             except Exception as e:
                 st.error(f"Query Error: {e}")
 
