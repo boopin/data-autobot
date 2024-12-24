@@ -1,4 +1,3 @@
-# App Version: 1.3.5
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -30,6 +29,8 @@ def create_aggregations(df, table_name, conn):
     """Create weekly, monthly, and quarterly aggregations for tables with a 'date' column."""
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        if df["date"].isnull().all():
+            raise ValueError(f"The 'date' column in table '{table_name}' contains no valid date values.")
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
@@ -43,9 +44,12 @@ def create_aggregations(df, table_name, conn):
 
 def display_schema(table_name, conn):
     """Display schema of a table."""
-    query = f"PRAGMA table_info({safe_table_name(table_name)})"
-    schema = pd.read_sql(query, conn)
-    return schema["name"].tolist()
+    try:
+        query = f"PRAGMA table_info({safe_table_name(table_name)})"
+        schema = pd.read_sql(query, conn)
+        return schema["name"].tolist()
+    except Exception as e:
+        raise ValueError(f"Error loading schema for table '{table_name}': {e}")
 
 
 def generate_query(table_name, date_filter, columns_to_display, comparison=None):
