@@ -1,3 +1,61 @@
+# App Version: 1.3.0
+import streamlit as st
+import pandas as pd
+import sqlite3
+import plotly.express as px
+from datetime import datetime, timedelta
+
+
+def load_file_to_db(uploaded_file, conn):
+    """Load uploaded file into SQLite database."""
+    if uploaded_file.name.endswith(".xlsx"):
+        xls = pd.ExcelFile(uploaded_file)
+        for sheet_name in xls.sheet_names:
+            df = xls.parse(sheet_name)
+            df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
+            df.to_sql(sheet_name.lower(), conn, index=False, if_exists="replace")
+    elif uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+        df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
+        table_name = uploaded_file.name.replace(".csv", "").lower()
+        df.to_sql(table_name, conn, index=False, if_exists="replace")
+
+
+def display_schema(table_name, conn):
+    """Display schema of a table."""
+    query = f"PRAGMA table_info({table_name})"
+    schema = pd.read_sql(query, conn)
+    return schema["name"].tolist()
+
+
+def generate_query(table_name, date_filter, columns_to_display, comparison=None):
+    """Generate SQL query dynamically."""
+    if comparison:
+        comp_period1, comp_filter1, comp_period2, comp_filter2 = comparison
+        query = f"""
+        SELECT SUM(impressions_total) as total, '{comp_period1}' as period FROM {table_name} WHERE {comp_filter1}
+        UNION ALL
+        SELECT SUM(impressions_total) as total, '{comp_period2}' as period FROM {table_name} WHERE {comp_filter2}
+        """
+    else:
+        where_clause = f"WHERE {date_filter}" if date_filter else ""
+        query = f"SELECT {', '.join(columns_to_display)} FROM {table_name} {where_clause} ORDER BY {columns_to_display[-1]} DESC LIMIT 10"
+    return query
+
+
+def create_aggregations(df, table_name, conn):
+    """Create weekly, monthly, and quarterly aggregations for tables with date columns."""
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["week"] = df["date"].dt.to_period("W").astype(str)
+        df["month"] = df["date"].dt.to_period("M").astype(str)
+        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
+
+        for period, group_col in [("weekly", "week"), ("monthly", "month"), ("quarterly", "quarter")]:
+            agg_df = df.groupby(group_col).sum().reset_index()
+            agg_df.to_sql(f"{table_name}_{period}", conn, index=False, if_exists="replace")
+
+
 def main():
     st.title("Data Analysis and Comparison Tool")
 
@@ -79,3 +137,7 @@ def main():
         st.error(f"Error loading file: {e}")
     finally:
         conn.close()
+
+
+if __name__ == "__main__":
+    main()
