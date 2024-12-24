@@ -29,7 +29,7 @@ def create_aggregations(df, table_name, conn):
         for period, agg_name in [("week", f"{table_name}_weekly"),
                                  ("month", f"{table_name}_monthly"),
                                  ("quarter", f"{table_name}_quarterly")]:
-            agg_df = df.groupby(period).sum().reset_index()
+            agg_df = df.groupby(period).sum(numeric_only=True).reset_index()
             agg_df.to_sql(agg_name, conn, index=False, if_exists="replace")
     else:
         df.to_sql(table_name, conn, index=False, if_exists="replace")
@@ -71,9 +71,14 @@ def main():
 
             if selected_table:
                 # Check if the selected table has a date column
-                has_date_column = "date" in pd.read_sql_query(f"PRAGMA table_info({selected_table})", conn)["name"].values
-                
-                if has_date_column:
+                try:
+                    columns_info = pd.read_sql_query(f"PRAGMA table_info({selected_table})", conn)
+                    available_columns = columns_info["name"].tolist()
+                except Exception as e:
+                    st.error(f"Error fetching schema for table '{selected_table}': {e}")
+                    return
+
+                if "date" in available_columns:
                     st.write("### Aggregation Options")
                     period = st.selectbox("Select Aggregation Period", ["Original", "Weekly", "Monthly", "Quarterly"])
                     if period != "Original":
@@ -81,20 +86,19 @@ def main():
 
                 # Allow user to select columns and filters
                 st.write("### Query Builder")
-                columns_query = f"PRAGMA table_info({selected_table})"
-                columns_info = pd.read_sql_query(columns_query, conn)
-                available_columns = columns_info["name"].tolist()
-
-                selected_columns = st.multiselect("Select Columns to Display", available_columns, default=available_columns)
-                if selected_columns:
-                    limit = st.number_input("Number of Records to Display", min_value=1, max_value=100, value=10)
-                    sql_query = f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT {limit}"
-                    
-                    st.write("Generated Query:", sql_query)
-                    query_result = pd.read_sql_query(sql_query, conn)
-                    st.dataframe(query_result)
+                if available_columns:
+                    selected_columns = st.multiselect("Select Columns to Display", available_columns, default=available_columns)
+                    if selected_columns:
+                        limit = st.number_input("Number of Records to Display", min_value=1, max_value=100, value=10)
+                        sql_query = f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT {limit}"
+                        
+                        st.write("Generated Query:", sql_query)
+                        query_result = pd.read_sql_query(sql_query, conn)
+                        st.dataframe(query_result)
+                    else:
+                        st.warning("Please select at least one column to display.")
                 else:
-                    st.warning("Please select at least one column to display.")
+                    st.warning("No columns available for selection. Please check the uploaded file.")
 
         except Exception as e:
             st.error(f"Error loading file: {e}")
