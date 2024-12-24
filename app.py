@@ -1,9 +1,14 @@
-# App Version: 1.3.0
+# App Version: 1.3.2
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
 from datetime import datetime, timedelta
+
+
+def safe_table_name(table_name):
+    """Quote table name to prevent SQL errors."""
+    return f'"{table_name}"'
 
 
 def load_file_to_db(uploaded_file, conn):
@@ -13,17 +18,32 @@ def load_file_to_db(uploaded_file, conn):
         for sheet_name in xls.sheet_names:
             df = xls.parse(sheet_name)
             df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
-            df.to_sql(sheet_name.lower(), conn, index=False, if_exists="replace")
+            create_aggregations(df, sheet_name.lower(), conn)
     elif uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
         df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
         table_name = uploaded_file.name.replace(".csv", "").lower()
-        df.to_sql(table_name, conn, index=False, if_exists="replace")
+        create_aggregations(df, table_name, conn)
+
+
+def create_aggregations(df, table_name, conn):
+    """Create weekly, monthly, and quarterly aggregations for tables with a 'date' column."""
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["week"] = df["date"].dt.to_period("W").astype(str)
+        df["month"] = df["date"].dt.to_period("M").astype(str)
+        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
+
+        for period, group_col in [("weekly", "week"), ("monthly", "month"), ("quarterly", "quarter")]:
+            agg_df = df.groupby(group_col).sum(numeric_only=True).reset_index()
+            agg_df.to_sql(safe_table_name(f"{table_name}_{period}"), conn, index=False, if_exists="replace")
+
+    df.to_sql(safe_table_name(table_name), conn, index=False, if_exists="replace")
 
 
 def display_schema(table_name, conn):
     """Display schema of a table."""
-    query = f"PRAGMA table_info({table_name})"
+    query = f"PRAGMA table_info({safe_table_name(table_name)})"
     schema = pd.read_sql(query, conn)
     return schema["name"].tolist()
 
@@ -33,27 +53,14 @@ def generate_query(table_name, date_filter, columns_to_display, comparison=None)
     if comparison:
         comp_period1, comp_filter1, comp_period2, comp_filter2 = comparison
         query = f"""
-        SELECT SUM(impressions_total) as total, '{comp_period1}' as period FROM {table_name} WHERE {comp_filter1}
+        SELECT SUM(impressions_total) as total, '{comp_period1}' as period FROM {safe_table_name(table_name)} WHERE {comp_filter1}
         UNION ALL
-        SELECT SUM(impressions_total) as total, '{comp_period2}' as period FROM {table_name} WHERE {comp_filter2}
+        SELECT SUM(impressions_total) as total, '{comp_period2}' as period FROM {safe_table_name(table_name)} WHERE {comp_filter2}
         """
     else:
         where_clause = f"WHERE {date_filter}" if date_filter else ""
-        query = f"SELECT {', '.join(columns_to_display)} FROM {table_name} {where_clause} ORDER BY {columns_to_display[-1]} DESC LIMIT 10"
+        query = f"SELECT {', '.join(columns_to_display)} FROM {safe_table_name(table_name)} {where_clause} ORDER BY {columns_to_display[-1]} DESC LIMIT 10"
     return query
-
-
-def create_aggregations(df, table_name, conn):
-    """Create weekly, monthly, and quarterly aggregations for tables with date columns."""
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["week"] = df["date"].dt.to_period("W").astype(str)
-        df["month"] = df["date"].dt.to_period("M").astype(str)
-        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-
-        for period, group_col in [("weekly", "week"), ("monthly", "month"), ("quarterly", "quarter")]:
-            agg_df = df.groupby(group_col).sum().reset_index()
-            agg_df.to_sql(f"{table_name}_{period}", conn, index=False, if_exists="replace")
 
 
 def main():
@@ -95,16 +102,12 @@ def main():
             # Comparison mode
             comparison_mode = st.checkbox("Enable Comparison")
             if comparison_mode:
-                if period_type == "Quarterly":
-                    comp_period1 = st.selectbox("Select first quarter:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
-                    comp_period2 = st.selectbox("Select second quarter:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
-                    comparison = (comp_period1, f"quarter = '{comp_period1}'", comp_period2, f"quarter = '{comp_period2}'")
-                elif period_type == "Monthly":
-                    comp_period1 = st.selectbox("Select first month:", ["2024-01", "2024-02", "2024-03", "2024-04"])
-                    comp_period2 = st.selectbox("Select second month:", ["2024-01", "2024-02", "2024-03", "2024-04"])
-                    comparison = (comp_period1, f"month = '{comp_period1}'", comp_period2, f"month = '{comp_period2}'")
+                if period_type in ["Quarterly", "Monthly", "Weekly"]:
+                    comp_period1 = st.selectbox(f"Select first {period_type}:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"] if period_type == "Quarterly" else ["2024-01", "2024-02", "2024-03"] if period_type == "Monthly" else ["2024-W01", "2024-W02", "2024-W03"])
+                    comp_period2 = st.selectbox(f"Select second {period_type}:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"] if period_type == "Quarterly" else ["2024-01", "2024-02", "2024-03"] if period_type == "Monthly" else ["2024-W01", "2024-W02", "2024-W03"])
+                    comparison = (comp_period1, f"{period_type.lower()} = '{comp_period1}'", comp_period2, f"{period_type.lower()} = '{comp_period2}'")
                 else:
-                    st.warning("Comparison mode is only available for Quarterly or Monthly selections.")
+                    st.warning("Comparison mode is only available for Weekly, Monthly, or Quarterly selections.")
                     comparison = None
             else:
                 comparison = None
