@@ -1,4 +1,4 @@
-# App Version: 1.3.2
+# App Version: 1.3.3
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 def safe_table_name(table_name):
     """Quote table name to prevent SQL errors."""
-    return f'"{table_name}"'
+    return f'[{table_name}]'
 
 
 def load_file_to_db(uploaded_file, conn):
