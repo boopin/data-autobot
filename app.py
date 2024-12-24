@@ -1,4 +1,4 @@
-# App Version: 1.3.3
+# App Version: 1.3.4
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 
 
 def safe_table_name(table_name):
-    """Quote table name to prevent SQL errors."""
-    return f'[{table_name}]'
+    """Properly format the table name for SQLite queries."""
+    return f'"{table_name}"'  # Use double quotes for valid SQLite table name quoting
 
 
 def load_file_to_db(uploaded_file, conn):
