@@ -1,189 +1,81 @@
-# App Version: 1.2.0
-import streamlit as st
-import pandas as pd
-import sqlite3
-import plotly.express as px
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage, AIMessage
-import logging
-import difflib
-import re
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
-
-# Configure logging
-logging.basicConfig(filename="workflow.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger()
-
-DEFAULT_COLUMNS = {
-    "all_posts": ["post_title", "post_link", "posted_by", "likes", "engagement_rate", "date"],
-    "metrics": ["date", "impressions", "clicks", "engagement_rate"],
-}
-
-QUERY_SHORTCUTS = {
-    "top_liked_posts": {
-        "description": "Top 5 posts with the most likes.",
-        "sql_template": "SELECT post_title, post_link, likes FROM all_posts ORDER BY likes DESC LIMIT 5"
-    },
-    "high_engagement": {
-        "description": "Top 10 posts with the highest engagement rate.",
-        "sql_template": "SELECT post_title, post_link, engagement_rate FROM all_posts ORDER BY engagement_rate DESC LIMIT 10"
-    },
-    "impressions_by_date": {
-        "description": "Daily impressions sorted by highest to lowest.",
-        "sql_template": "SELECT date, impressions FROM metrics ORDER BY impressions DESC LIMIT 10"
-    },
-    "recent_clicks": {
-        "description": "Most clicked posts in the last week.",
-        "sql_template": (
-            "SELECT post_title, post_link, clicks FROM all_posts "
-            "WHERE date BETWEEN '{start_date}' AND '{end_date}' ORDER BY clicks DESC LIMIT 5"
-        )
-    }
-}
-
-EXAMPLE_QUERIES = [
-    "Show me the top 5 dates with the highest total impressions.",
-    "Show me the posts with the most clicks.",
-    "What is the average engagement rate of all posts?",
-    "Generate a bar graph of clicks grouped by post type.",
-    "Show me the top 10 posts with the most likes, displaying post title, post link, posted by, and likes.",
-    "What are the engagement rates for Q3 2024?",
-    "Show impressions by day for last week.",
-    "Show me the top 5 posts with the highest engagement rate."
-]
-
-class PreprocessingPipeline:
-    @staticmethod
-    def clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
-        df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
-        return df
-
-    @staticmethod
-    def handle_missing_dates(df: pd.DataFrame) -> pd.DataFrame:
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        return df
-
-    @staticmethod
-    def fix_arrow_incompatibility(df: pd.DataFrame) -> pd.DataFrame:
-        for col in df.columns:
-            if df[col].dtype == "object":
-                df[col] = df[col].astype("string", errors="ignore")
-        return df
-
-    @staticmethod
-    def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-        df = PreprocessingPipeline.clean_column_names(df)
-        df = PreprocessingPipeline.handle_missing_dates(df)
-        df = PreprocessingPipeline.fix_arrow_incompatibility(df)
-        return df
-
-def preprocess_dataframe_for_arrow(df):
-    """
-    Preprocess the dataframe to ensure all columns are compatible with Arrow serialization.
-    """
-    for col in df.columns:
-        if pd.api.types.is_object_dtype(df[col]):
-            df[col] = df[col].astype("string")  # Convert object columns to string
-        elif pd.api.types.is_categorical_dtype(df[col]):
-            df[col] = df[col].astype("string")  # Convert categorical columns to string
-        elif pd.api.types.is_datetime64_any_dtype(df[col]):
-            df[col] = df[col].astype("datetime64[ns]")  # Ensure proper datetime format
-    return df
-
-def replace_date_placeholders(sql_template):
-    today = datetime.today()
-    start_date = (today - relativedelta(weeks=1)).strftime("%Y-%m-%d")
-    end_date = today.strftime("%Y-%m-%d")
-    return sql_template.format(start_date=start_date, end_date=end_date)
-
-def extract_data(query, database_connection):
-    """Extracts data from the database using SQL queries."""
-    try:
-        df = pd.read_sql_query(query, database_connection)
-        return preprocess_dataframe_for_arrow(df)  # Ensure compatibility for Arrow serialization
-    except Exception as e:
-        return {"error": str(e)}
-
 def main():
-    st.title("AI Reports Analyzer with LangChain Workflow")
+    st.title("Data Analysis and Comparison Tool")
 
-    uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+    uploaded_file = st.file_uploader("Upload your data file (CSV or Excel):", type=["csv", "xlsx"])
     if not uploaded_file:
-        st.info("Please upload a file.")
+        st.info("Please upload a file to get started.")
         return
 
+    # SQLite connection
+    conn = sqlite3.connect(":memory:")
     try:
-        conn = sqlite3.connect(":memory:")
-        table_names = []
+        load_file_to_db(uploaded_file, conn)
+        st.success("File successfully processed and loaded into the database!")
 
-        # Load and preprocess the uploaded file
-        if uploaded_file.name.endswith('.xlsx'):
-            excel_data = pd.ExcelFile(uploaded_file)
-            sheet_names = excel_data.sheet_names
-            logger.info(f"Excel file loaded with sheets: {sheet_names}")
+        # Available tables
+        tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table'", conn)
+        table_names = tables["name"].tolist()
+        selected_table = st.selectbox("Select a table for analysis:", table_names)
 
-            for sheet in sheet_names:
-                df = pd.read_excel(excel_data, sheet_name=sheet)
-                df = PreprocessingPipeline.preprocess_data(df)
-                table_name = sheet.lower().replace(" ", "_").replace("-", "_")
-                df.to_sql(table_name, conn, index=False, if_exists="replace")
-                table_names.append(table_name)
-                logger.info(f"Sheet '{sheet}' loaded into table '{table_name}'.")
+        # Show table schema
+        schema_columns = display_schema(selected_table, conn)
+        st.write(f"Schema for {selected_table}: {schema_columns}")
 
-        elif uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-            df = PreprocessingPipeline.preprocess_data(df)
-            table_name = uploaded_file.name.lower().replace(".csv", "").replace(" ", "_").replace("-", "_")
-            df.to_sql(table_name, conn, index=False, if_exists="replace")
-            table_names.append(table_name)
-            logger.info("CSV file loaded successfully.")
+        # Check for 'date' column dynamically
+        has_date_column = "date" in schema_columns
 
-        else:
-            raise ValueError("Unsupported file type. Please upload a CSV or Excel file.")
+        # Filters and options based on schema
+        if has_date_column:
+            period_type = st.selectbox("Select a date range for analysis:", ["Daily", "Weekly", "Monthly", "Quarterly", "Custom"])
+            if period_type == "Custom":
+                start_date = st.date_input("Start Date", value=datetime.today() - timedelta(days=30))
+                end_date = st.date_input("End Date", value=datetime.today())
+                date_filter = f"date BETWEEN '{start_date}' AND '{end_date}'"
+            else:
+                date_filter = None
 
-        st.success("Data successfully loaded into the database!")
-
-        # Let the user select a table
-        selected_table = st.selectbox("Select a table to query:", table_names)
-
-        st.write("### Query Shortcuts")
-        for shortcut, details in QUERY_SHORTCUTS.items():
-            st.markdown(f"**{shortcut}**: {details['description']}")
-
-        user_query = st.text_area("Enter your query or shortcut", "")
-
-        if st.button("Run Query"):
-            if not user_query.strip():
-                st.error("Please enter a valid query or shortcut.")
-                return
-
-            # Check if the query matches a shortcut
-            sql_query = None
-            if user_query in QUERY_SHORTCUTS:
-                sql_query = QUERY_SHORTCUTS[user_query]["sql_template"]
-                if "{start_date}" in sql_query or "{end_date}" in sql_query:
-                    sql_query = replace_date_placeholders(sql_query)
-
-            if not sql_query:
-                # Assume the user entered a custom SQL command
-                sql_query = user_query
-
-            try:
-                query_result = extract_data(sql_query, conn)
-                if isinstance(query_result, dict) and "error" in query_result:
-                    st.error(f"Query failed: {query_result['error']}")
+            # Comparison mode
+            comparison_mode = st.checkbox("Enable Comparison")
+            if comparison_mode:
+                if period_type == "Quarterly":
+                    comp_period1 = st.selectbox("Select first quarter:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+                    comp_period2 = st.selectbox("Select second quarter:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+                    comparison = (comp_period1, f"quarter = '{comp_period1}'", comp_period2, f"quarter = '{comp_period2}'")
+                elif period_type == "Monthly":
+                    comp_period1 = st.selectbox("Select first month:", ["2024-01", "2024-02", "2024-03", "2024-04"])
+                    comp_period2 = st.selectbox("Select second month:", ["2024-01", "2024-02", "2024-03", "2024-04"])
+                    comparison = (comp_period1, f"month = '{comp_period1}'", comp_period2, f"month = '{comp_period2}'")
                 else:
-                    st.write("### Query Results")
-                    st.dataframe(query_result)
+                    st.warning("Comparison mode is only available for Quarterly or Monthly selections.")
+                    comparison = None
+            else:
+                comparison = None
+        else:
+            st.info("This table does not contain a 'date' column. Aggregation options are disabled.")
+            period_type = None
+            date_filter = None
+            comparison = None
 
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+        # Column selection
+        columns_to_display = st.multiselect("Select columns to display:", schema_columns, default=schema_columns[:3])
 
+        # Generate and execute query
+        query = generate_query(selected_table, date_filter, columns_to_display, comparison)
+        st.info(f"Generated Query:\n{query}")
+
+        try:
+            data = pd.read_sql(query, conn)
+            st.write("### Query Results")
+            st.dataframe(data)
+
+            # Option to visualize
+            if st.checkbox("Show Visualization"):
+                column_to_visualize = st.selectbox("Select column for visualization:", columns_to_display)
+                fig = px.bar(data, x="period" if comparison else "date", y=column_to_visualize, title="Visualization")
+                st.plotly_chart(fig)
+        except Exception as e:
+            st.error(f"Error executing query: {e}")
     except Exception as e:
-        logger.error(f"Error: {e}")
-        st.error(f"Error: {e}")
-
-if __name__ == "__main__":
-    main()
+        st.error(f"Error loading file: {e}")
+    finally:
+        conn.close()
