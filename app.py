@@ -1,137 +1,100 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Configure logging
-logging.basicConfig(filename="app.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger()
-
-def preprocess_file(uploaded_file):
-    """Preprocess uploaded file and return dataframe."""
-    try:
-        if uploaded_file.name.endswith(".xlsx"):
-            excel_data = pd.ExcelFile(uploaded_file)
-            sheets = {sheet_name: pd.read_excel(excel_data, sheet_name=sheet_name) for sheet_name in excel_data.sheet_names}
-        elif uploaded_file.name.endswith(".csv"):
-            sheets = {"default": pd.read_csv(uploaded_file)}
-        else:
-            raise ValueError("Unsupported file format.")
-        return sheets
-    except Exception as e:
-        logger.error(f"Error preprocessing file: {e}")
-        st.error("Error reading the file. Ensure it's a valid CSV or Excel file.")
-        return None
-
-def create_aggregations_with_quarters(df, table_name, conn):
-    """Add 'quarter' column and create weekly, monthly, and quarterly aggregations."""
+# Function to preprocess data
+def preprocess_data(df):
+    df.columns = [col.lower().replace(" ", "_") for col in df.columns]
     if "date" in df.columns:
-        try:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-            df = df.dropna(subset=["date"])  # Drop rows where the 'date' could not be converted
-            df["quarter"] = df["date"].dt.to_period("Q").astype(str)  # Adds Q1 2024, etc.
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["month"] = df["date"].dt.to_period("M").astype(str)
+        df["week"] = df["date"].dt.strftime("%U")
+        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
+    return df
 
-            # Save raw table with quarter information
-            df.to_sql(f"{table_name}_raw", conn, index=False, if_exists="replace")
+# Function to create aggregations
+def create_aggregations(df, table_name, conn):
+    if "date" in df.columns:
+        df_weekly = df.groupby(["week"]).sum().reset_index()
+        df_monthly = df.groupby(["month"]).sum().reset_index()
+        df_quarterly = df.groupby(["quarter"]).sum().reset_index()
+        df_weekly.to_sql(f"{table_name}_weekly", conn, if_exists="replace", index=False)
+        df_monthly.to_sql(f"{table_name}_monthly", conn, if_exists="replace", index=False)
+        df_quarterly.to_sql(f"{table_name}_quarterly", conn, if_exists="replace", index=False)
 
-            # Weekly aggregation
-            df_weekly = df.groupby(df["date"].dt.to_period("W")).sum(numeric_only=True).reset_index()
-            df_weekly["date"] = df_weekly["date"].dt.start_time
-            df_weekly.to_sql(f"{table_name}_weekly", conn, index=False, if_exists="replace")
+# Function for comparison query
+def comparison_query(selected_table, granularity, first_period, second_period, conn):
+    try:
+        table_name = f"{selected_table}_{granularity.lower()}"
+        query = f"""
+            SELECT SUM(impressions_total) AS total, '{first_period}' AS period FROM {table_name} WHERE {granularity.lower()} = '{first_period}'
+            UNION ALL
+            SELECT SUM(impressions_total) AS total, '{second_period}' AS period FROM {table_name} WHERE {granularity.lower()} = '{second_period}'
+        """
+        st.info(f"Generated Query: {query}")
+        df_result = pd.read_sql_query(query, conn)
+        st.write("### Comparison Results")
+        st.dataframe(df_result)
+    except Exception as e:
+        st.error(f"Error: {e}")
 
-            # Monthly aggregation
-            df_monthly = df.groupby(df["date"].dt.to_period("M")).sum(numeric_only=True).reset_index()
-            df_monthly["date"] = df_monthly["date"].dt.start_time
-            df_monthly.to_sql(f"{table_name}_monthly", conn, index=False, if_exists="replace")
-
-            # Quarterly aggregation
-            df_quarterly = df.groupby("quarter").sum(numeric_only=True).reset_index()
-            df_quarterly.to_sql(f"{table_name}_quarterly", conn, index=False, if_exists="replace")
-        except Exception as e:
-            logger.error(f"Error creating aggregations for table '{table_name}': {e}")
-            st.error(f"Error creating aggregations for table '{table_name}'.")
-    else:
-        logger.warning(f"Table '{table_name}' does not have a 'date' column for aggregation.")
-        st.warning(f"Table '{table_name}' does not have a 'date' column for aggregation.")
-
+# Main function
 def main():
-    st.title("Data Analysis Autobot")
+    st.title("Data Analysis with Comparisons")
 
-    uploaded_file = st.file_uploader("Upload your file", type=["csv", "xlsx"])
+    uploaded_file = st.file_uploader("Upload Excel or CSV", type=["xlsx", "csv"])
     if not uploaded_file:
-        st.info("Please upload a file to start analysis.")
+        st.info("Please upload a file.")
         return
 
-    conn = sqlite3.connect(":memory:")
+    try:
+        conn = sqlite3.connect(":memory:")
 
-    # Preprocess file and load data into SQLite
-    sheets = preprocess_file(uploaded_file)
-    if not sheets:
-        return
+        if uploaded_file.name.endswith(".xlsx"):
+            xl = pd.ExcelFile(uploaded_file)
+            for sheet_name in xl.sheet_names:
+                df = xl.parse(sheet_name)
+                df = preprocess_data(df)
+                df.to_sql(sheet_name.lower(), conn, if_exists="replace", index=False)
+                create_aggregations(df, sheet_name.lower(), conn)
 
-    st.success("File successfully processed and saved to the database!")
-    table_names = []
-    for sheet_name, df in sheets.items():
-        try:
-            df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
-            df.to_sql(sheet_name, conn, index=False, if_exists="replace")
-            table_names.append(sheet_name)
+        elif uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+            df = preprocess_data(df)
+            table_name = uploaded_file.name.split(".")[0].lower()
+            df.to_sql(table_name, conn, if_exists="replace", index=False)
+            create_aggregations(df, table_name, conn)
 
-            # Create aggregations
-            create_aggregations_with_quarters(df, sheet_name, conn)
-        except Exception as e:
-            logger.error(f"Error processing sheet {sheet_name}: {e}")
-            st.error(f"Error processing sheet {sheet_name}.")
+        st.success("Data successfully processed and saved to the database!")
 
-    # Dropdown for table selection
-    selected_table = st.selectbox("Select a table for analysis:", table_names)
-    if not selected_table:
-        st.warning("No table selected.")
-        return
+        # Table selection
+        table_names = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]
+        selected_table = st.selectbox("Select Table for Analysis", table_names)
 
-    # Dropdown for date ranges and comparison
-    date_range = st.selectbox("Select Date Range", ["Weekly", "Monthly", "Quarterly", "Custom"])
-    compare = st.checkbox("Comparison Mode")
-    date_start, date_end = None, None
+        # Analysis Options
+        analysis_mode = st.radio("Select Analysis Mode", ["Query", "Comparison"])
+        
+        if analysis_mode == "Query":
+            # Allow user to write queries
+            st.write("Write your SQL query below:")
+            user_query = st.text_area("SQL Query")
+            if st.button("Run Query"):
+                try:
+                    result = pd.read_sql_query(user_query, conn)
+                    st.dataframe(result)
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        
+        elif analysis_mode == "Comparison":
+            granularity = st.selectbox("Select Granularity", ["Weekly", "Monthly", "Quarterly"])
+            first_period = st.text_input(f"Select First {granularity}")
+            second_period = st.text_input(f"Select Second {granularity}")
+            if st.button("Run Comparison"):
+                comparison_query(selected_table, granularity, first_period, second_period, conn)
 
-    if date_range == "Custom":
-        date_start = st.date_input("Start Date")
-        date_end = st.date_input("End Date")
-
-    # Dropdown for columns to include
-    columns_query = f"PRAGMA table_info({selected_table});"
-    columns_info = pd.read_sql_query(columns_query, conn)
-    columns_list = [col["name"] for col in columns_info.to_dict(orient="records")]
-
-    selected_columns = st.multiselect("Select columns for analysis:", columns_list, default=columns_list[:3])
-
-    # Dropdown for number of rows
-    num_rows = st.selectbox("Number of rows to display:", [5, 10, 25, 50])
-
-    if st.button("Run Analysis"):
-        if not selected_columns:
-            st.error("Please select at least one column.")
-            return
-
-        try:
-            where_clause = ""
-            if date_range == "Custom" and date_start and date_end:
-                where_clause = f"WHERE date BETWEEN '{date_start}' AND '{date_end}'"
-            elif date_range in ["Weekly", "Monthly", "Quarterly"]:
-                table_suffix = date_range.lower()
-                selected_table += f"_{table_suffix}"
-
-            order_by_column = selected_columns[-1] if selected_columns else "id"
-            sql_query = f"SELECT {', '.join(selected_columns)} FROM {selected_table} {where_clause} ORDER BY {order_by_column} DESC LIMIT {num_rows}"
-            st.info(f"Generated Query: {sql_query}")
-
-            df_result = pd.read_sql_query(sql_query, conn)
-            st.write("### Query Results")
-            st.dataframe(df_result)
-        except Exception as e:
-            logger.error(f"Error running query: {e}")
-            st.error(f"Error: {e}")
+    except Exception as e:
+        st.error(f"Error: {e}")
 
 if __name__ == "__main__":
     main()
