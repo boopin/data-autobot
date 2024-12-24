@@ -2,98 +2,132 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
+import plotly.express as px
+import logging
 
-# Initialize Streamlit app
-st.title("Data Analysis Tool")
+# Configure logging
+logging.basicConfig(filename="workflow.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger()
 
-def preprocess_data(df):
-    """Preprocess the DataFrame for SQL operations."""
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace("(", "").str.replace(")", "")
+def create_aggregations_with_quarters(df, table_name, conn):
+    """Add 'quarter' column and create weekly, monthly, and quarterly aggregations."""
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    return df
+        df["quarter"] = df["date"].dt.to_period("Q").astype(str)  # Adds Q1 2024, etc.
 
-def create_aggregations(df, table_name, conn):
-    """
-    Create aggregated tables (weekly, monthly, quarterly) and save them to the database.
-    """
-    if "date" not in df.columns:
-        return  # Skip if there is no 'date' column
-    
-    # Ensure the 'date' column is datetime
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if df["date"].isnull().all():
-        raise ValueError("The 'date' column contains no valid datetime values.")
-    
-    periods = {
-        "weekly": df["date"].dt.to_period("W").dt.start_time,
-        "monthly": df["date"].dt.to_period("M").dt.start_time,
-        "quarterly": df["date"].dt.to_period("Q").dt.start_time,
-    }
-    
-    for period, period_values in periods.items():
-        agg_df = df.copy()
-        agg_df["period"] = period_values
-        numeric_columns = agg_df.select_dtypes(include=["number"]).columns
-        agg_df = agg_df.groupby("period")[numeric_columns].sum().reset_index()
-        table_name_agg = f"{table_name}_{period}"
-        agg_df.to_sql(table_name_agg, conn, index=False, if_exists="replace")
+        # Save raw table with quarter information
+        df.to_sql(f"{table_name}_raw", conn, index=False, if_exists="replace")
+
+        # Weekly aggregation
+        df_weekly = df.groupby(df["date"].dt.to_period("W")).sum().reset_index()
+        df_weekly.to_sql(f"{table_name}_weekly", conn, index=False, if_exists="replace")
+
+        # Monthly aggregation
+        df_monthly = df.groupby(df["date"].dt.to_period("M")).sum().reset_index()
+        df_monthly.to_sql(f"{table_name}_monthly", conn, index=False, if_exists="replace")
+
+        # Quarterly aggregation
+        df_quarterly = df.groupby("quarter").sum().reset_index()
+        df_quarterly.to_sql(f"{table_name}_quarterly", conn, index=False, if_exists="replace")
+    else:
+        st.warning(f"Table '{table_name}' does not have a 'date' column for aggregation.")
 
 def main():
-    st.subheader("Upload Data Files")
-    uploaded_file = st.file_uploader("Upload your CSV or Excel file", type=["csv", "xlsx"])
-    if uploaded_file:
-        try:
-            conn = sqlite3.connect(":memory:")
-            table_names = []
+    st.title("Data AutoBot with Comparison and Time Period Analysis")
 
-            if uploaded_file.name.endswith(".xlsx"):
-                excel_data = pd.ExcelFile(uploaded_file)
-                for sheet in excel_data.sheet_names:
-                    df = pd.read_excel(excel_data, sheet_name=sheet)
-                    df = preprocess_data(df)
-                    table_name = sheet.lower().replace(" ", "_")
-                    df.to_sql(table_name, conn, index=False, if_exists="replace")
-                    create_aggregations(df, table_name, conn)
-                    table_names.append(table_name)
+    uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+    if not uploaded_file:
+        st.info("Please upload a file to start analysis.")
+        return
 
-            elif uploaded_file.name.endswith(".csv"):
-                df = pd.read_csv(uploaded_file)
-                df = preprocess_data(df)
-                table_name = uploaded_file.name.replace(".csv", "").lower().replace(" ", "_")
-                df.to_sql(table_name, conn, index=False, if_exists="replace")
-                create_aggregations(df, table_name, conn)
+    try:
+        conn = sqlite3.connect(":memory:")
+        table_names = []
+
+        # Load file and process
+        if uploaded_file.name.endswith('.xlsx'):
+            excel_data = pd.ExcelFile(uploaded_file)
+            for sheet in excel_data.sheet_names:
+                df = pd.read_excel(excel_data, sheet_name=sheet)
+                table_name = sheet.lower().replace(" ", "_")
+                create_aggregations_with_quarters(df, table_name, conn)
                 table_names.append(table_name)
-            
-            st.success("File successfully processed and saved to the database!")
-            st.write("Available Tables:", table_names)
 
-            selected_table = st.selectbox("Select a table for analysis", table_names)
-            if selected_table:
-                schema_query = f"PRAGMA table_info({selected_table});"
-                schema_info = pd.read_sql_query(schema_query, conn)
-                st.write("Schema Information:")
-                st.dataframe(schema_info)
+        elif uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+            table_name = uploaded_file.name.replace(".csv", "").lower().replace(" ", "_")
+            create_aggregations_with_quarters(df, table_name, conn)
+            table_names.append(table_name)
 
-                st.subheader("Build Your Query")
-                columns = schema_info["name"].tolist()
-                date_range = st.selectbox("Select Date Range", ["Weekly", "Monthly", "Quarterly", "Custom"])
-                metrics = st.multiselect("Select Metrics", columns)
-                top_n = st.selectbox("Select Top N Rows", [5, 10, 25, 50])
+        else:
+            st.error("Unsupported file type. Please upload a CSV or Excel file.")
+            return
 
-                if st.button("Run Query"):
-                    period_table = f"{selected_table}_{date_range.lower()}"
-                    query = f"SELECT {', '.join(metrics)} FROM {period_table} ORDER BY {metrics[-1]} DESC LIMIT {top_n}"
-                    st.write("Generated Query:", query)
-                    try:
-                        result = pd.read_sql_query(query, conn)
-                        st.write("Query Result:")
-                        st.dataframe(result)
-                    except Exception as e:
-                        st.error(f"Query failed: {e}")
+        st.success("File successfully processed and saved to the database!")
 
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
+        # Select table for analysis
+        selected_table = st.selectbox("Select a table to analyze:", table_names)
+
+        # Date range selection
+        st.write("### Select Time Period")
+        period_type = st.radio("Time Period", ["Weekly", "Monthly", "Quarterly", "Custom"], index=2)
+        compare_toggle = st.checkbox("Enable Comparison")
+
+        if period_type == "Custom":
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start Date")
+            with col2:
+                end_date = st.date_input("End Date")
+
+        # Run comparison or analysis
+        if compare_toggle:
+            st.write("### Comparison Settings")
+            col1, col2 = st.columns(2)
+            with col1:
+                period_1 = st.selectbox("Select First Period:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+            with col2:
+                period_2 = st.selectbox("Select Second Period:", ["Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024"])
+
+            query_1 = f"SELECT SUM(impressions_total) as total, '{period_1}' as period FROM {selected_table}_quarterly WHERE quarter = '{period_1}'"
+            query_2 = f"SELECT SUM(impressions_total) as total, '{period_2}' as period FROM {selected_table}_quarterly WHERE quarter = '{period_2}'"
+            combined_query = f"{query_1} UNION ALL {query_2}"
+            result = pd.read_sql_query(combined_query, conn)
+            result["percentage_change"] = result["total"].pct_change().fillna(0) * 100
+            st.write("### Comparison Results")
+            st.dataframe(result)
+        else:
+            # Normal query without comparison
+            if period_type == "Weekly":
+                period_table = f"{selected_table}_weekly"
+            elif period_type == "Monthly":
+                period_table = f"{selected_table}_monthly"
+            elif period_type == "Quarterly":
+                period_table = f"{selected_table}_quarterly"
+            elif period_type == "Custom":
+                period_table = f"{selected_table}_raw"
+                query_filter = f"WHERE date BETWEEN '{start_date}' AND '{end_date}'"
+            else:
+                period_table = f"{selected_table}_raw"
+
+            # Dynamic column selection
+            columns_query = f"PRAGMA table_info({period_table});"
+            columns_info = pd.read_sql_query(columns_query, conn)["name"].tolist()
+            selected_columns = st.multiselect("Select columns to display:", columns_info, default=columns_info[:5])
+
+            # Generate SQL Query
+            query = f"SELECT {', '.join(selected_columns)} FROM {period_table}"
+            if period_type == "Custom":
+                query += f" {query_filter}"
+            query += " LIMIT 10"
+            st.info(f"Generated Query: {query}")
+            result = pd.read_sql_query(query, conn)
+            st.write("### Query Results")
+            st.dataframe(result)
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+        logger.error(f"Error: {e}")
 
 if __name__ == "__main__":
     main()
