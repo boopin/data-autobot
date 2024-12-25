@@ -1,4 +1,4 @@
-# App Version: 2.5.1
+# App Version: 2.6.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,7 +21,7 @@ def generate_visualization(results, x_col, y_col):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.5.1")
+    st.write("Version: 2.6.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -51,7 +51,7 @@ def process_and_store(df, table_name):
 
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notnull()]  # Remove rows with invalid dates
+        df = df[df["date"].notnull()]
 
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
@@ -61,12 +61,11 @@ def process_and_store(df, table_name):
         save_aggregated_view(df, table_name, "month", "monthly")
         save_aggregated_view(df, table_name, "quarter", "quarterly")
 
-    df = df.drop_duplicates()
     df.to_sql(table_name, conn, if_exists="replace", index=False)
     st.write(f"Table '{table_name}' created in the database.")
 
 def save_aggregated_view(df, table_name, period_col, suffix):
-    """Save aggregated views by period (weekly, monthly, quarterly)."""
+    """Save aggregated views by period."""
     try:
         if period_col in df.columns:
             agg_df = df.groupby(period_col).sum(numeric_only=True).reset_index()
@@ -78,7 +77,7 @@ def save_aggregated_view(df, table_name, period_col, suffix):
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
-    st.write("**Version: 2.5.1**")
+    st.write("**Version: 2.6.0**")
 
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
     tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
@@ -90,18 +89,16 @@ def generate_analysis_ui():
         schema = pd.read_sql_query(columns_query, conn)
         columns = schema["name"].tolist()
 
-        st.write(f"Schema for '{selected_table}': {columns}")
+        numerical_columns = [col for col in columns if pd.api.types.is_numeric_dtype(schema[schema["name"] == col].iloc[0])]
+        non_numerical_columns = [col for col in columns if col not in numerical_columns]
 
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+            selected_metric = st.selectbox("Select metric to analyze:", numerical_columns)
 
         with col2:
-            additional_columns = st.multiselect(
-                "Select additional columns:",
-                [col for col in columns if col != selected_metric]
-            )
+            additional_columns = st.multiselect("Additional columns to display:", non_numerical_columns)
 
         with col3:
             sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
@@ -111,13 +108,11 @@ def generate_analysis_ui():
             compare_type = st.selectbox("Comparison Type:", ["Weekly", "Monthly", "Quarterly"])
             if compare_type:
                 agg_table_name = f"{selected_table}_{compare_type.lower()}"
+                periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {quote_table_name(agg_table_name)} ORDER BY {compare_type.lower()}"
                 try:
-                    periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {quote_table_name(agg_table_name)} ORDER BY {compare_type.lower()}"
                     periods = pd.read_sql_query(periods_query, conn)[compare_type.lower()].tolist()
-
                     period_1 = st.selectbox("Select Period 1:", periods)
                     period_2 = st.selectbox("Select Period 2:", periods)
-
                     if period_1 and period_2:
                         compare_query = f"""
                         SELECT '{period_1}' AS period, SUM({selected_metric}) AS total
@@ -132,35 +127,20 @@ def generate_analysis_ui():
                         ).round(2)
                         st.write("Comparison Results:")
                         st.dataframe(comparison_results)
-
-                        if st.checkbox("Generate Visualization for Comparison"):
-                            generate_visualization(comparison_results, "period", "total")
                 except Exception as e:
                     st.error(f"Error retrieving periods: {e}")
 
         if st.button("Run Analysis"):
-            if selected_metric:
-                run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
-            else:
-                st.warning("Please select a metric to analyze.")
+            run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
 
 def run_analysis(table, metric, additional_columns, sort_order, row_limit):
     """Run the analysis and generate output."""
+    select_columns = [metric] + additional_columns
+    sort_clause = "DESC" if sort_order == "Highest" else "ASC"
+    query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
     try:
-        select_columns = [metric] + additional_columns
-
-        sort_clause = "DESC" if sort_order == "Highest" else "ASC"
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
-        
-        st.write("Generated Query:")
-        st.code(query)
-
         results = pd.read_sql_query(query, conn)
-        st.write("Query Results:")
         st.dataframe(results)
-
-        if st.checkbox("Generate Visualization"):
-            generate_visualization(results, results.columns[0], metric)
     except Exception as e:
         st.error(f"Error executing query: {e}")
 
