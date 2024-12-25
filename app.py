@@ -1,4 +1,4 @@
-# App Version: 2.4.2
+# App Version: 2.4.3
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -26,7 +26,6 @@ def process_uploaded_file(uploaded_file):
     else:
         df = pd.read_excel(uploaded_file, sheet_name=None)
     
-    # Process all sheets or a single DataFrame
     if isinstance(df, dict):
         st.write("Detected multiple sheets in the uploaded file.")
         for sheet_name, sheet_df in df.items():
@@ -38,33 +37,24 @@ def process_uploaded_file(uploaded_file):
 
 def process_and_store(df, table_name):
     """Process the DataFrame and store it in the SQLite database with aggregations."""
-    # Clean column names
     df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
 
-    # Handle date column
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notnull()]  # Remove rows with invalid dates
-
-        # Add derived time periods
+        df = df[df["date"].notnull()]
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-
-        # Save aggregated views for weekly, monthly, and quarterly
         save_aggregated_view(df, table_name, "week", "weekly")
         save_aggregated_view(df, table_name, "month", "monthly")
         save_aggregated_view(df, table_name, "quarter", "quarterly")
 
-    # Deduplicate the data
     df = df.drop_duplicates()
-
-    # Save raw data to the database
     df.to_sql(table_name, conn, if_exists="replace", index=False)
     st.write(f"Table '{table_name}' created in the database with raw and aggregated views.")
 
 def save_aggregated_view(df, table_name, period_col, suffix):
-    """Save aggregated views by period (weekly, monthly, quarterly)."""
+    """Save aggregated views by period."""
     try:
         if period_col in df.columns:
             agg_df = df.groupby(period_col).sum(numeric_only=True).reset_index()
@@ -91,13 +81,10 @@ def generate_analysis_ui():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if pd.api.types.is_numeric_dtype(col)])
+            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"])
 
         with col2:
-            additional_columns = st.multiselect(
-                "Select additional columns:",
-                [col for col in columns if col != selected_metric]
-            )
+            additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
 
         with col3:
             sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
@@ -112,7 +99,7 @@ def generate_analysis_ui():
         generate_comparison_ui(selected_table)
 
 def generate_comparison_ui(table_name):
-    """Generate UI for enabling and running comparisons, including custom date ranges."""
+    """Generate UI for enabling and running comparisons."""
     st.subheader("Enable Comparison")
     enable_comparison = st.checkbox("Toggle Comparison")
 
@@ -198,6 +185,19 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
             generate_visualization(results, metric)
     except Exception as e:
         st.error(f"Error executing query: {e}")
+
+def main():
+    st.title("Data Autobot")
+    st.write("Version: 2.4.3")
+
+    uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
+
+    if uploaded_file:
+        try:
+            process_uploaded_file(uploaded_file)
+            generate_analysis_ui()
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 if __name__ == "__main__":
     main()
