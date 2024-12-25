@@ -1,69 +1,54 @@
-# App Version: 1.5.4
+# App Version: 1.2.0
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
+from datetime import datetime, timedelta
+import plotly.express as px
 
-DATABASE = ":memory:"
+DATABASE = "data_analysis.db"
 
-st.title("Data Autobot")
-st.subheader("Analyze Your Data with Ease")
-st.write("**App Version:** 1.5.4")
+# Utility function to preprocess column names
+def preprocess_column_names(columns):
+    return [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "_") for col in columns]
 
-def preprocess_data(df):
-    """Preprocess the DataFrame by cleaning column names and ensuring correct types."""
-    df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
+# Function to load data into SQLite
+def load_data_to_sqlite(uploaded_file, conn):
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    elif uploaded_file.name.endswith(".xlsx"):
+        df = pd.ExcelFile(uploaded_file)
+        for sheet in df.sheet_names:
+            data = df.parse(sheet)
+            data.columns = preprocess_column_names(data.columns)
+            table_name = sheet.lower().replace(" ", "_").replace("-", "_")
+            data.to_sql(table_name, conn, if_exists="replace", index=False)
+    st.success("Data successfully loaded into SQLite!")
+
+# Function to create aggregated tables
+def create_aggregations(table_name, conn):
+    query = f"SELECT * FROM {table_name}"
+    df = pd.read_sql_query(query, conn)
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    return df
-
-def create_aggregation_tables(df, table_name, conn):
-    """Create aggregation tables (daily, weekly, monthly, quarterly) from the base DataFrame."""
-    if "date" in df.columns:
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-        numeric_columns = df.select_dtypes(include=["number"]).columns.tolist()
 
-        if numeric_columns:
-            df.to_sql(f"{table_name}_daily", conn, index=False, if_exists="replace")
-            weekly = df.groupby("week")[numeric_columns].sum().reset_index()
-            weekly.to_sql(f"{table_name}_weekly", conn, index=False, if_exists="replace")
-            monthly = df.groupby("month")[numeric_columns].sum().reset_index()
-            monthly.to_sql(f"{table_name}_monthly", conn, index=False, if_exists="replace")
-            quarterly = df.groupby("quarter")[numeric_columns].sum().reset_index()
-            quarterly.to_sql(f"{table_name}_quarterly", conn, index=False, if_exists="replace")
-        else:
-            st.warning(f"No numeric columns found for {table_name}. Skipping aggregation.")
+        for period in ["week", "month", "quarter"]:
+            agg_df = df.groupby(period).sum(numeric_only=True).reset_index()
+            agg_table_name = f"{table_name}_{period}"
+            agg_df.to_sql(agg_table_name, conn, if_exists="replace", index=False)
     else:
-        st.error(f"Table '{table_name}' does not contain a 'date' column for aggregation.")
+        st.warning(f"The table '{table_name}' does not have a 'date' column for aggregation.")
 
-def load_data_to_sqlite(file, conn):
-    """Load data from uploaded file into SQLite and create aggregation tables if applicable."""
-    try:
-        if file.name.endswith(".xlsx"):
-            excel_data = pd.ExcelFile(file)
-            for sheet_name in excel_data.sheet_names:
-                df = preprocess_data(excel_data.parse(sheet_name))
-                table_name = sheet_name.lower().replace(" ", "_")
-                df.to_sql(table_name, conn, index=False, if_exists="replace")
-                create_aggregation_tables(df, table_name, conn)
-        elif file.name.endswith(".csv"):
-            df = preprocess_data(pd.read_csv(file))
-            table_name = file.name.lower().replace(".csv", "").replace(" ", "_")
-            df.to_sql(table_name, conn, index=False, if_exists="replace")
-            create_aggregation_tables(df, table_name, conn)
-        else:
-            st.error("Unsupported file format. Please upload a CSV or Excel file.")
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-
+# Main Streamlit app
 def main():
-    """Main function to handle the app flow."""
+    st.title("Data Analysis App with SQLite")
+    st.markdown("Version 1.2.0")
+
     uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
     if not uploaded_file:
-        st.info("Please upload a file to get started.")
+        st.info("Please upload a file to start analysis.")
         return
 
     conn = sqlite3.connect(DATABASE)
@@ -79,11 +64,16 @@ def main():
 
     columns_info = pd.read_sql_query(f"PRAGMA table_info({selected_table});", conn)
     columns = columns_info["name"].tolist()
+    numeric_columns = [col for col in columns if col != "date"]
 
-    if "date" in columns:
+    if not numeric_columns:
+        st.warning(f"No numeric columns found in the '{selected_table}' table for analysis.")
+        return
+
+    metric = st.selectbox("Select Metric to Analyze:", numeric_columns, disabled=not numeric_columns)
+
+    if metric:
         aggregation_type = st.selectbox("Select aggregation type:", ["Daily", "Weekly", "Monthly", "Quarterly", "Custom"])
-        metric = st.selectbox("Select metric to analyze:", [col for col in columns if pd.api.types.is_numeric_dtype(columns_info.loc[columns_info['name'] == col, 'type'])])
-        
         if aggregation_type == "Custom":
             start_date = st.date_input("Start date:")
             end_date = st.date_input("End date:")
@@ -91,43 +81,43 @@ def main():
                 query = f"SELECT date, {metric} FROM {selected_table}_daily WHERE date BETWEEN '{start_date}' AND '{end_date}' ORDER BY {metric} DESC LIMIT 10"
         else:
             query = f"SELECT {aggregation_type.lower()}, {metric} FROM {selected_table}_{aggregation_type.lower()} ORDER BY {metric} DESC LIMIT 10"
-    else:
-        aggregation_type = None
-        metric = st.selectbox("Select metric to analyze:", [col for col in columns if pd.api.types.is_numeric_dtype(columns_info.loc[columns_info['name'] == col, 'type'])])
-        query = f"SELECT {', '.join(columns)}, {metric} FROM {selected_table} ORDER BY {metric} DESC LIMIT 10"
-    
-    if st.button("Generate"):
-        try:
-            result_df = pd.read_sql_query(query, conn)
-            st.dataframe(result_df)
-        except Exception as e:
-            st.error(f"Error executing query: {e}")
+
+        if st.button("Generate"):
+            try:
+                result_df = pd.read_sql_query(query, conn)
+                st.dataframe(result_df)
+
+                if st.checkbox("Show as Chart"):
+                    fig = px.bar(result_df, x=aggregation_type.lower(), y=metric, title=f"{metric} Analysis")
+                    st.plotly_chart(fig)
+
+            except Exception as e:
+                st.error(f"Error executing query: {e}")
 
     if st.checkbox("Enable Comparison"):
-        compare_type = st.selectbox("Compare by:", ["Weekly", "Monthly", "Quarterly"])
-        periods = sorted(pd.read_sql_query(f"SELECT DISTINCT {compare_type.lower()} FROM {selected_table}_{compare_type.lower()}", conn)[compare_type.lower()])
-        selected_periods = st.multiselect("Select periods to compare:", periods)
-        metric = st.selectbox("Select metric to compare:", [col for col in columns if pd.api.types.is_numeric_dtype(columns_info.loc[columns_info['name'] == col, 'type'])])
+        compare_type = st.selectbox("Select comparison type:", ["Weekly", "Monthly", "Quarterly"])
+        if compare_type:
+            st.write(f"Comparison mode enabled: {compare_type}")
+            options = sorted(df[compare_type.lower()].unique())
+            period1 = st.selectbox("Select first period:", options)
+            period2 = st.selectbox("Select second period:", options)
 
-        if st.button("Compare"):
-            if len(selected_periods) == 2:
-                comparison_query = f"""
-                SELECT '{selected_periods[0]}' as period, SUM({metric}) as total FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{selected_periods[0]}'
+            if period1 and period2 and st.button("Compare"):
+                query = f"""
+                SELECT SUM({metric}) as total, '{period1}' as period FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{period1}'
                 UNION ALL
-                SELECT '{selected_periods[1]}' as period, SUM({metric}) as total FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{selected_periods[1]}'
+                SELECT SUM({metric}) as total, '{period2}' as period FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{period2}'
                 """
                 try:
-                    comparison_result = pd.read_sql_query(comparison_query, conn)
-                    comparison_result["Change (%)"] = (
-                        (comparison_result["total"].iloc[1] - comparison_result["total"].iloc[0])
-                        / comparison_result["total"].iloc[0]
-                        * 100
-                    ).round(2)
-                    st.dataframe(comparison_result)
+                    comparison_df = pd.read_sql_query(query, conn)
+                    comparison_df["Percentage Change"] = comparison_df["total"].pct_change() * 100
+                    st.dataframe(comparison_df)
+
+                    if st.checkbox("Show Comparison Chart"):
+                        fig = px.bar(comparison_df, x="period", y="total", title=f"{metric} Comparison")
+                        st.plotly_chart(fig)
                 except Exception as e:
                     st.error(f"Error executing comparison query: {e}")
-            else:
-                st.warning("Please select exactly two periods for comparison.")
 
 if __name__ == "__main__":
     main()
