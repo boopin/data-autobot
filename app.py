@@ -2,80 +2,126 @@ import streamlit as st
 import pandas as pd
 import duckdb
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 
-def load_data(file):
-    """Load Excel/CSV file into DuckDB."""
-    if file.name.endswith('.xlsx'):
-        excel_data = pd.ExcelFile(file)
-        table_names = []
-        for sheet_name in excel_data.sheet_names:
-            df = excel_data.parse(sheet_name)
+# Initialize database connection
+conn = duckdb.connect()
+
+def initialize_database(uploaded_file):
+    """Process uploaded file and save it into DuckDB."""
+    try:
+        if uploaded_file.name.endswith(".xlsx"):
+            excel_data = pd.ExcelFile(uploaded_file)
+            for sheet in excel_data.sheet_names:
+                df = pd.read_excel(excel_data, sheet_name=sheet)
+                table_name = sheet.lower().replace(" ", "_")
+                df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
+                df.to_parquet(f"{table_name}.parquet")
+                conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{table_name}.parquet')")
+        elif uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+            table_name = uploaded_file.name.lower().replace(".csv", "").replace(" ", "_")
             df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
-            conn.sql(f"CREATE OR REPLACE TABLE {sheet_name.lower()} AS SELECT * FROM df")
-            table_names.append(sheet_name.lower())
-    elif file.name.endswith('.csv'):
-        df = pd.read_csv(file)
-        df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
-        table_name = file.name.lower().replace(".csv", "").replace(" ", "_")
-        conn.sql(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
-        return [table_name]
-    return table_names
+            df.to_parquet(f"{table_name}.parquet")
+            conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{table_name}.parquet')")
+        else:
+            st.error("Unsupported file format. Please upload a CSV or Excel file.")
+            return []
+        return conn.execute("SHOW TABLES").fetchall()
+    except Exception as e:
+        st.error(f"Error initializing database: {e}")
+        return []
 
-def create_aggregations(table_name):
-    """Generate weekly, monthly, quarterly aggregations."""
-    df = conn.sql(f"SELECT * FROM {table_name}").df()
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'])
-        df['week'] = df['date'].dt.to_period('W').apply(str)
-        df['month'] = df['date'].dt.to_period('M').apply(str)
-        df['quarter'] = df['date'].dt.to_period('Q').apply(str)
-        conn.sql(f"CREATE OR REPLACE TABLE {table_name}_weekly AS SELECT * FROM df")
-        conn.sql(f"CREATE OR REPLACE TABLE {table_name}_monthly AS SELECT * FROM df")
-        conn.sql(f"CREATE OR REPLACE TABLE {table_name}_quarterly AS SELECT * FROM df")
-    else:
-        st.warning(f"Table {table_name} does not have a date column. Aggregations skipped.")
+def dynamic_date_aggregation(df):
+    """Create weekly, monthly, and quarterly aggregations."""
+    if "date" not in df.columns:
+        return
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["week"] = df["date"].dt.to_period("W").astype(str)
+    df["month"] = df["date"].dt.to_period("M").astype(str)
+    df["quarter"] = df["date"].dt.to_period("Q").astype(str)
+    return df
 
-def render_comparison():
-    """Render comparison options for weekly/monthly/quarterly selections."""
-    agg_level = st.selectbox("Select comparison level", ["Weekly", "Monthly", "Quarterly"])
-    table = st.selectbox("Select table for comparison", table_names)
-    if agg_level.lower() in table:
-        first_period = st.selectbox("Select first period", conn.sql(f"SELECT DISTINCT {agg_level.lower()} FROM {table}_{agg_level.lower()}").df()[agg_level.lower()])
-        second_period = st.selectbox("Select second period", conn.sql(f"SELECT DISTINCT {agg_level.lower()} FROM {table}_{agg_level.lower()}").df()[agg_level.lower()])
-        if st.button("Compare"):
-            compare_query = f"""
-                SELECT '{first_period}' AS period, SUM(impressions_total) AS total FROM {table}_{agg_level.lower()} WHERE {agg_level.lower()} = '{first_period}'
-                UNION ALL
-                SELECT '{second_period}' AS period, SUM(impressions_total) AS total FROM {table}_{agg_level.lower()} WHERE {agg_level.lower()} = '{second_period}'
-            """
-            comparison_df = conn.sql(compare_query).df()
-            comparison_df['percentage_change'] = comparison_df['total'].pct_change() * 100
-            st.write(comparison_df)
+def display_schema_options(table_name):
+    """Show schema options for a selected table."""
+    try:
+        schema = conn.execute(f"DESCRIBE {table_name}").fetchdf()
+        st.write(f"Schema for {table_name}:")
+        st.dataframe(schema)
+        return schema["name"].tolist()
+    except Exception as e:
+        st.error(f"Error fetching schema: {e}")
+        return []
+
+def render_visualizations(df, chart_type):
+    """Render visualizations using Plotly."""
+    if chart_type == "Bar Chart":
+        column = st.selectbox("Select a column for bar chart:", df.columns)
+        fig = px.bar(df, x=df.index, y=column, title=f"Bar Chart for {column}")
+        st.plotly_chart(fig)
+    elif chart_type == "Line Chart":
+        column = st.selectbox("Select a column for line chart:", df.columns)
+        fig = px.line(df, x=df.index, y=column, title=f"Line Chart for {column}")
+        st.plotly_chart(fig)
 
 def main():
     st.title("Data Autobot with DuckDB")
-    uploaded_file = st.file_uploader("Upload your CSV or Excel file", type=["csv", "xlsx"])
+    st.info("Upload a CSV or Excel file to start analysis.")
+
+    uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
     if not uploaded_file:
-        st.info("Please upload a file.")
         return
 
-    global conn, table_names
-    conn = duckdb.connect(database=":memory:")
-    table_names = load_data(uploaded_file)
+    tables = initialize_database(uploaded_file)
+    if not tables:
+        return
 
-    st.success("File successfully processed!")
-    selected_table = st.selectbox("Select a table for analysis", table_names)
+    selected_table = st.selectbox("Select a table:", [table[0] for table in tables])
+    schema_options = display_schema_options(selected_table)
+    if not schema_options:
+        return
 
-    if "date" in conn.sql(f"PRAGMA table_info('{selected_table}')").df()["column_name"].values:
-        create_aggregations(selected_table)
-        render_comparison()
+    date_aggregation = st.selectbox(
+        "Select Date Aggregation (if applicable):",
+        ["None", "Weekly", "Monthly", "Quarterly"]
+    )
+
+    # Handle dynamic date aggregation
+    if date_aggregation != "None":
+        if "date" not in schema_options:
+            st.error(f"Selected table '{selected_table}' does not have a 'date' column.")
+            return
+        df = pd.read_parquet(f"{selected_table}.parquet")
+        df = dynamic_date_aggregation(df)
+        aggregation_column = (
+            "week" if date_aggregation == "Weekly" else
+            "month" if date_aggregation == "Monthly" else
+            "quarter"
+        )
+        df = df.groupby(aggregation_column).sum().reset_index()
+        st.dataframe(df)
+        render_visualizations(df, st.selectbox("Select Visualization Type:", ["Bar Chart", "Line Chart"]))
     else:
-        st.warning("This table does not support date-based aggregations.")
+        query = st.text_area("Write your SQL Query:")
+        if st.button("Run Query"):
+            try:
+                result = conn.execute(query).fetchdf()
+                st.dataframe(result)
+            except Exception as e:
+                st.error(f"Query failed: {e}")
 
-    # Render columns dynamically
-    st.write("### Select columns for analysis")
-    columns = conn.sql(f"PRAGMA table_info('{selected_table}')").df()["column_name"].values
-    selected_columns = st.multiselect("Select columns to display", columns)
-    if selected_columns:
-        st.dataframe(conn.sql(f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT 10").df())
+    if st.checkbox("Enable Comparison"):
+        compare_type = st.selectbox("Compare By:", ["Weekly", "Monthly", "Quarterly"])
+        st.info(f"Comparison mode enabled: {compare_type}")
+        # Add dropdowns to select periods for comparison
+        if compare_type in ["Weekly", "Monthly", "Quarterly"]:
+            options = sorted(df[compare_type.lower()].unique())
+            start_period = st.selectbox("Select Start Period:", options)
+            end_period = st.selectbox("Select End Period:", options)
+            comparison_result = df.loc[
+                (df[compare_type.lower()] >= start_period) & (df[compare_type.lower()] <= end_period)
+            ]
+            st.dataframe(comparison_result)
+
+if __name__ == "__main__":
+    main()
