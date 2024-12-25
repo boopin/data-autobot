@@ -1,4 +1,4 @@
-# App Version: 2.3.0
+# App Version: 2.3.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,7 +21,7 @@ def generate_visualization(results, metric):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.3.0")
+    st.write("Version: 2.3.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -86,7 +86,7 @@ def save_aggregated_view(df, table_name, period_col, suffix):
 def generate_analysis_ui():
     """Generate UI for data analysis."""
     # Display version number
-    st.write("**Version: 2.3.0**")
+    st.write("**Version: 2.3.1**")
 
     # Get available tables
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
@@ -119,21 +119,22 @@ def generate_analysis_ui():
         if st.checkbox("Enable Comparison"):
             compare_type = st.selectbox("Comparison Type:", ["Weekly", "Monthly", "Quarterly"])
             if compare_type:
-                periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {selected_table}_{compare_type.lower()} ORDER BY {compare_type.lower()}"
-                periods = pd.read_sql_query(periods_query, conn)[compare_type.lower()].tolist()
+                agg_table_name = f"{selected_table}_{compare_type.lower()}"  # Correctly form the table name
+                periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {quote_table_name(agg_table_name)} ORDER BY {compare_type.lower()}"
+                try:
+                    periods = pd.read_sql_query(periods_query, conn)[compare_type.lower()].tolist()
 
-                period_1 = st.selectbox("Select Period 1:", periods)
-                period_2 = st.selectbox("Select Period 2:", periods)
+                    period_1 = st.selectbox("Select Period 1:", periods)
+                    period_2 = st.selectbox("Select Period 2:", periods)
 
-                if period_1 and period_2:
-                    compare_query = f"""
-                    SELECT '{period_1}' AS period, SUM({selected_metric}) AS total
-                    FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{period_1}'
-                    UNION ALL
-                    SELECT '{period_2}' AS period, SUM({selected_metric}) AS total
-                    FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{period_2}'
-                    """
-                    try:
+                    if period_1 and period_2:
+                        compare_query = f"""
+                        SELECT '{period_1}' AS period, SUM({selected_metric}) AS total
+                        FROM {quote_table_name(agg_table_name)} WHERE {compare_type.lower()} = '{period_1}'
+                        UNION ALL
+                        SELECT '{period_2}' AS period, SUM({selected_metric}) AS total
+                        FROM {quote_table_name(agg_table_name)} WHERE {compare_type.lower()} = '{period_2}'
+                        """
                         comparison_results = pd.read_sql_query(compare_query, conn)
                         comparison_results["% Change"] = (
                             comparison_results["total"].pct_change().fillna(0) * 100
@@ -144,8 +145,8 @@ def generate_analysis_ui():
                         # Visualization for Comparison
                         if st.checkbox("Generate Visualization for Comparison"):
                             generate_visualization(comparison_results, "total")
-                    except Exception as e:
-                        st.error(f"Error executing comparison query: {e}")
+                except Exception as e:
+                    st.error(f"Error retrieving periods: {e}")
 
         # Run Analysis Button
         if st.button("Run Analysis"):
