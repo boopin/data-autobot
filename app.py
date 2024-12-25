@@ -82,6 +82,17 @@ def get_numeric_columns(df):
     """Get numeric columns from dataframe"""
     return [col for col, dtype in df.dtypes.items() if pd.api.types.is_numeric_dtype(dtype)]
 
+def build_stats_query(metrics, table_name):
+    """Build the SQL query for summary statistics"""
+    stat_expressions = []
+    for m in metrics:
+        stat_expressions.extend([
+            f"AVG({m}) as avg_{m}",
+            f"MIN({m}) as min_{m}",
+            f"MAX({m}) as max_{m}"
+        ])
+    return f"SELECT {', '.join(stat_expressions)} FROM {table_name}"
+
 def main():
     st.title("Data Analysis App")
     
@@ -133,11 +144,7 @@ def main():
             
             if date_columns and analysis_type == 'Time Series':
                 # Time series analysis
-                query = f"""
-                SELECT {date_column}, {', '.join(selected_metrics)}
-                FROM {table_name}
-                ORDER BY {date_column}
-                """
+                query = f"SELECT {date_column}, {', '.join(selected_metrics)} FROM {table_name} ORDER BY {date_column}"
                 result_df = pd.read_sql_query(query, conn)
                 
                 fig = px.line(
@@ -149,12 +156,7 @@ def main():
                 st.plotly_chart(fig, use_container_width=True)
             
             # Summary statistics
-            stats_query = f"""
-            SELECT 
-                {', '.join([f'AVG({m}) as avg_{m}, MIN({m}) as min_{m}, 
-                MAX({m}) as max_{m}' for m in selected_metrics])}
-            FROM {table_name}
-            """
+            stats_query = build_stats_query(selected_metrics, table_name)
             stats_df = pd.read_sql_query(stats_query, conn)
             st.dataframe(stats_df)
             
