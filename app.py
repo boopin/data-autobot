@@ -1,4 +1,4 @@
-# App Version: 2.6.0
+# App Version: 2.6.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,7 +21,7 @@ def generate_visualization(results, x_col, y_col):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.6.0")
+    st.write("Version: 2.6.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -77,7 +77,7 @@ def save_aggregated_view(df, table_name, period_col, suffix):
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
-    st.write("**Version: 2.6.0**")
+    st.write("**Version: 2.6.1**")
 
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
     tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
@@ -89,16 +89,26 @@ def generate_analysis_ui():
         schema = pd.read_sql_query(columns_query, conn)
         columns = schema["name"].tolist()
 
-        numerical_columns = [col for col in columns if pd.api.types.is_numeric_dtype(schema[schema["name"] == col].iloc[0])]
-        non_numerical_columns = [col for col in columns if col not in numerical_columns]
+        # Identify numeric columns
+        data_query = f"SELECT * FROM {quote_table_name(selected_table)} LIMIT 1;"
+        try:
+            sample_data = pd.read_sql_query(data_query, conn)
+            numeric_columns = sample_data.select_dtypes(include=['number']).columns.tolist()
+        except Exception as e:
+            numeric_columns = []
+
+        if not numeric_columns:
+            st.warning(f"No numeric columns available for analysis in the table '{selected_table}'.")
+
+        non_numeric_columns = [col for col in columns if col not in numeric_columns]
 
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select metric to analyze:", numerical_columns)
+            selected_metric = st.selectbox("Select metric to analyze:", numeric_columns)
 
         with col2:
-            additional_columns = st.multiselect("Additional columns to display:", non_numerical_columns)
+            additional_columns = st.multiselect("Additional columns to display:", non_numeric_columns)
 
         with col3:
             sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
