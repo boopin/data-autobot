@@ -2,95 +2,80 @@ import streamlit as st
 import pandas as pd
 import duckdb
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Helper function to check if a column exists in a table
-def check_date_column(table_schema):
-    return 'date' in table_schema
+def load_data(file):
+    """Load Excel/CSV file into DuckDB."""
+    if file.name.endswith('.xlsx'):
+        excel_data = pd.ExcelFile(file)
+        table_names = []
+        for sheet_name in excel_data.sheet_names:
+            df = excel_data.parse(sheet_name)
+            df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
+            conn.sql(f"CREATE OR REPLACE TABLE {sheet_name.lower()} AS SELECT * FROM df")
+            table_names.append(sheet_name.lower())
+    elif file.name.endswith('.csv'):
+        df = pd.read_csv(file)
+        df.columns = [col.lower().strip().replace(" ", "_") for col in df.columns]
+        table_name = file.name.lower().replace(".csv", "").replace(" ", "_")
+        conn.sql(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
+        return [table_name]
+    return table_names
 
-# Helper function for visualizations
-def visualize_data(df, x_column, y_column, title="Visualization"):
-    """Generates a Plotly bar chart."""
-    fig = px.bar(df, x=x_column, y=y_column, title=title)
-    st.plotly_chart(fig)
+def create_aggregations(table_name):
+    """Generate weekly, monthly, quarterly aggregations."""
+    df = conn.sql(f"SELECT * FROM {table_name}").df()
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df['week'] = df['date'].dt.to_period('W').apply(str)
+        df['month'] = df['date'].dt.to_period('M').apply(str)
+        df['quarter'] = df['date'].dt.to_period('Q').apply(str)
+        conn.sql(f"CREATE OR REPLACE TABLE {table_name}_weekly AS SELECT * FROM df")
+        conn.sql(f"CREATE OR REPLACE TABLE {table_name}_monthly AS SELECT * FROM df")
+        conn.sql(f"CREATE OR REPLACE TABLE {table_name}_quarterly AS SELECT * FROM df")
+    else:
+        st.warning(f"Table {table_name} does not have a date column. Aggregations skipped.")
 
-# Main function
+def render_comparison():
+    """Render comparison options for weekly/monthly/quarterly selections."""
+    agg_level = st.selectbox("Select comparison level", ["Weekly", "Monthly", "Quarterly"])
+    table = st.selectbox("Select table for comparison", table_names)
+    if agg_level.lower() in table:
+        first_period = st.selectbox("Select first period", conn.sql(f"SELECT DISTINCT {agg_level.lower()} FROM {table}_{agg_level.lower()}").df()[agg_level.lower()])
+        second_period = st.selectbox("Select second period", conn.sql(f"SELECT DISTINCT {agg_level.lower()} FROM {table}_{agg_level.lower()}").df()[agg_level.lower()])
+        if st.button("Compare"):
+            compare_query = f"""
+                SELECT '{first_period}' AS period, SUM(impressions_total) AS total FROM {table}_{agg_level.lower()} WHERE {agg_level.lower()} = '{first_period}'
+                UNION ALL
+                SELECT '{second_period}' AS period, SUM(impressions_total) AS total FROM {table}_{agg_level.lower()} WHERE {agg_level.lower()} = '{second_period}'
+            """
+            comparison_df = conn.sql(compare_query).df()
+            comparison_df['percentage_change'] = comparison_df['total'].pct_change() * 100
+            st.write(comparison_df)
+
 def main():
-    st.title("Data Analysis App with DuckDB and Plotly")
-
-    # File upload
-    uploaded_file = st.file_uploader("Upload your file (CSV or Excel)", type=["csv", "xlsx"])
+    st.title("Data Autobot with DuckDB")
+    uploaded_file = st.file_uploader("Upload your CSV or Excel file", type=["csv", "xlsx"])
     if not uploaded_file:
-        st.info("Please upload a file to proceed.")
+        st.info("Please upload a file.")
         return
 
-    conn = duckdb.connect(database=':memory:', read_only=False)
-    table_names = []
+    global conn, table_names
+    conn = duckdb.connect(database=":memory:")
+    table_names = load_data(uploaded_file)
 
-    try:
-        # Load data into DuckDB
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-            table_name = uploaded_file.name.split('.')[0]
-            conn.register(table_name, df)
-            table_names.append(table_name)
-        elif uploaded_file.name.endswith(".xlsx"):
-            excel_data = pd.ExcelFile(uploaded_file)
-            for sheet in excel_data.sheet_names:
-                df = excel_data.parse(sheet)
-                conn.register(sheet.lower().replace(" ", "_"), df)
-                table_names.append(sheet.lower().replace(" ", "_"))
-        
-        st.success("Data successfully loaded into DuckDB!")
+    st.success("File successfully processed!")
+    selected_table = st.selectbox("Select a table for analysis", table_names)
 
-        # Select table
-        selected_table = st.selectbox("Select a table to analyze:", table_names)
+    if "date" in conn.sql(f"PRAGMA table_info('{selected_table}')").df()["column_name"].values:
+        create_aggregations(selected_table)
+        render_comparison()
+    else:
+        st.warning("This table does not support date-based aggregations.")
 
-        # Get table schema
-        query = f"PRAGMA table_info({selected_table})"
-        schema_df = conn.execute(query).fetchdf()
-        column_names = schema_df['name'].tolist()
-
-        # Check for a date column
-        has_date_column = check_date_column(column_names)
-
-        # Dropdowns for dynamic menus
-        if has_date_column:
-            date_granularity = st.selectbox("Select date granularity:", ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"])
-            st.info(f"Selected Date Granularity: {date_granularity}")
-        else:
-            st.warning(f"Table '{selected_table}' does not have a 'date' column. Date-based options are hidden.")
-
-        # Query customization
-        selected_columns = st.multiselect("Select columns to display:", column_names, default=column_names[:5])
-        if not selected_columns:
-            st.error("Please select at least one column.")
-            return
-
-        top_n = st.selectbox("Select number of rows to display:", [5, 10, 25, 50], index=1)
-
-        # Custom query generation
-        query = f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT {top_n}"
-        st.info(f"Generated Query: {query}")
-
-        # Execute query
-        try:
-            query_result = conn.execute(query).fetchdf()
-            st.write("### Query Results")
-            st.dataframe(query_result)
-
-            # Visualization toggle
-            if st.checkbox("Show as chart"):
-                x_column = st.selectbox("Select X-axis column:", selected_columns)
-                y_column = st.selectbox("Select Y-axis column:", selected_columns)
-                visualize_data(query_result, x_column=x_column, y_column=y_column)
-
-        except Exception as e:
-            st.error(f"Query Error: {e}")
-
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-
-if __name__ == "__main__":
-    main()
-
+    # Render columns dynamically
+    st.write("### Select columns for analysis")
+    columns = conn.sql(f"PRAGMA table_info('{selected_table}')").df()["column_name"].values
+    selected_columns = st.multiselect("Select columns to display", columns)
+    if selected_columns:
+        st.dataframe(conn.sql(f"SELECT {', '.join(selected_columns)} FROM {selected_table} LIMIT 10").df())
