@@ -1,4 +1,4 @@
-# App Version: 1.3.0
+# App Version: 1.3.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -24,54 +24,55 @@ def load_file(file):
             for sheet_name in excel_data.sheet_names:
                 df = pd.read_excel(excel_data, sheet_name=sheet_name)
                 df = preprocess_column_names(df)
-                df.to_sql(sheet_name.lower().replace(" ", "_"), conn, index=False, if_exists="replace")
+                create_aggregated_tables(df, sheet_name.lower().replace(" ", "_"))
         elif file.name.endswith(".csv"):
             df = pd.read_csv(file)
             df = preprocess_column_names(df)
             table_name = file.name.replace(".csv", "").lower().replace(" ", "_")
-            df.to_sql(table_name, conn, index=False, if_exists="replace")
+            create_aggregated_tables(df, table_name)
         st.success("File successfully processed and loaded into the database!")
     except Exception as e:
         st.error(f"Error loading file: {e}")
 
-def get_table_schema(table_name):
-    """Retrieve the schema of a table from the database."""
-    try:
-        quoted_table_name = quote_table_name(table_name)
-        schema_query = f"PRAGMA table_info({quoted_table_name})"
-        schema_info = pd.read_sql_query(schema_query, conn)
-        return schema_info["name"].tolist()
-    except Exception as e:
-        st.error(f"Error retrieving schema for table '{table_name}': {e}")
-        return []
+def create_aggregated_tables(df, table_name):
+    """Create weekly, monthly, and quarterly aggregated tables."""
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["week"] = df["date"].dt.to_period("W").astype(str)
+        df["month"] = df["date"].dt.to_period("M").astype(str)
+        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
 
-def get_numeric_columns(table_name):
-    """Retrieve numeric columns from the table schema."""
+        df.to_sql(table_name, conn, index=False, if_exists="replace")
+        df.groupby("week").sum().reset_index().to_sql(f"{table_name}_weekly", conn, index=False, if_exists="replace")
+        df.groupby("month").sum().reset_index().to_sql(f"{table_name}_monthly", conn, index=False, if_exists="replace")
+        df.groupby("quarter").sum().reset_index().to_sql(f"{table_name}_quarterly", conn, index=False, if_exists="replace")
+    else:
+        df.to_sql(table_name, conn, index=False, if_exists="replace")
+
+def get_distinct_periods(table_name, period_type):
+    """Retrieve distinct period values for comparison dropdowns."""
     try:
-        quoted_table_name = quote_table_name(table_name)
-        schema_query = f"PRAGMA table_info({quoted_table_name})"
-        schema_info = pd.read_sql_query(schema_query, conn)
-        numeric_columns = schema_info[schema_info["type"].str.contains("INT|REAL|FLOAT|NUMERIC", case=False, na=False)]["name"].tolist()
-        return numeric_columns
+        query = f"SELECT DISTINCT {period_type} FROM {table_name}"
+        return pd.read_sql_query(query, conn)[period_type].tolist()
     except Exception as e:
-        st.error(f"Error retrieving numeric columns for table '{table_name}': {e}")
+        st.error(f"Error fetching periods: {e}")
         return []
 
 def generate_comparison_query(table_name, metric, compare_type, period1, period2):
     """Generate SQL query for comparison between two periods."""
-    quoted_table_name = quote_table_name(table_name)
+    quoted_table_name = quote_table_name(f"{table_name}_{compare_type.lower()}")
     query = f"""
     SELECT
         '{period1}' AS period, SUM({metric}) AS total
     FROM
-        {quoted_table_name}_{compare_type.lower()}
+        {quoted_table_name}
     WHERE
         {compare_type.lower()} = '{period1}'
     UNION ALL
     SELECT
         '{period2}' AS period, SUM({metric}) AS total
     FROM
-        {quoted_table_name}_{compare_type.lower()}
+        {quoted_table_name}
     WHERE
         {compare_type.lower()} = '{period2}'
     """
@@ -92,13 +93,14 @@ def main():
         selected_table = st.selectbox("Select table to analyze:", available_tables)
 
         if selected_table:
-            schema_columns = get_table_schema(selected_table)
+            schema_query = f"PRAGMA table_info({quote_table_name(selected_table)})"
+            schema_columns = pd.read_sql_query(schema_query, conn)["name"].tolist()
 
             if schema_columns:
                 # Dynamic Dropdown for Metrics
-                numeric_columns = get_numeric_columns(selected_table)
+                numeric_columns = [col for col in schema_columns if "int" in col or "real" in col]
                 selected_metric = st.selectbox("Select metric to analyze:", numeric_columns if numeric_columns else ["No numeric columns available"])
-                
+
                 # Optional Columns to Display
                 extra_columns = st.multiselect(
                     "Select additional columns to display:",
@@ -117,55 +119,27 @@ def main():
                 if enable_comparison:
                     compare_type = st.selectbox("Select comparison type:", ["Weekly", "Monthly", "Quarterly", "Custom"])
                     if compare_type != "Custom":
-                        periods = st.multiselect(f"Select two {compare_type.lower()} periods:", ["Period 1", "Period 2"])
-                        if len(periods) == 2:
-                            query = generate_comparison_query(selected_table, selected_metric, compare_type, periods[0], periods[1])
-                            try:
-                                comparison_result = pd.read_sql_query(query, conn)
-                                comparison_result["Percentage Change (%)"] = (
-                                    (comparison_result.iloc[1]["total"] - comparison_result.iloc[0]["total"]) / comparison_result.iloc[0]["total"]
-                                ) * 100
-                                st.write("### Comparison Results")
-                                st.dataframe(comparison_result)
+                        periods = get_distinct_periods(f"{selected_table}_{compare_type.lower()}", compare_type.lower())
+                        if periods:
+                            period1 = st.selectbox("Select Period 1:", periods)
+                            period2 = st.selectbox("Select Period 2:", periods)
+                            if period1 and period2 and period1 != period2:
+                                query = generate_comparison_query(selected_table, selected_metric, compare_type, period1, period2)
+                                try:
+                                    comparison_result = pd.read_sql_query(query, conn)
+                                    comparison_result["Percentage Change (%)"] = (
+                                        (comparison_result.iloc[1]["total"] - comparison_result.iloc[0]["total"]) / comparison_result.iloc[0]["total"]
+                                    ) * 100
+                                    st.write("### Comparison Results")
+                                    st.dataframe(comparison_result)
 
-                                if st.checkbox("Generate Comparison Chart"):
-                                    fig = px.bar(comparison_result, x="period", y="total", title="Comparison Chart")
-                                    st.plotly_chart(fig)
-                            except Exception as e:
-                                st.error(f"Error executing comparison query: {e}")
+                                    if st.checkbox("Generate Comparison Chart"):
+                                        fig = px.bar(comparison_result, x="period", y="total", title="Comparison Chart")
+                                        st.plotly_chart(fig)
+                                except Exception as e:
+                                    st.error(f"Error executing comparison query: {e}")
                     else:
                         st.warning("Custom comparison is not fully implemented yet.")
 
-                # Generate SQL Query
-                if selected_metric and selected_metric != "No numeric columns available":
-                    sql_query = f"""
-                        SELECT {', '.join([selected_metric] + extra_columns)}
-                        FROM {selected_table}
-                        ORDER BY {selected_metric} {'DESC' if sort_order == 'Highest' else 'ASC'}
-                        LIMIT {num_rows}
-                    """
-                    try:
-                        result_df = pd.read_sql_query(sql_query, conn)
-                        st.write("### Query Results")
-                        st.dataframe(result_df)
-
-                        # Optional Visualization
-                        if st.checkbox("Generate Visualization"):
-                            chart_type = st.selectbox("Select chart type:", ["Bar Chart", "Line Chart", "Scatter Plot"])
-                            if chart_type == "Bar Chart":
-                                fig = px.bar(result_df, x=extra_columns[0] if extra_columns else selected_metric, y=selected_metric, title="Bar Chart")
-                                st.plotly_chart(fig)
-                            elif chart_type == "Line Chart":
-                                fig = px.line(result_df, x=extra_columns[0] if extra_columns else selected_metric, y=selected_metric, title="Line Chart")
-                                st.plotly_chart(fig)
-                            elif chart_type == "Scatter Plot":
-                                fig = px.scatter(result_df, x=extra_columns[0] if extra_columns else selected_metric, y=selected_metric, title="Scatter Plot")
-                                st.plotly_chart(fig)
-                    except Exception as e:
-                        st.error(f"Error executing query: {e}")
-                else:
-                    st.warning("Please select a valid metric to analyze.")
-
 if __name__ == "__main__":
     main()
-
