@@ -1,4 +1,4 @@
-# App Version: 1.3.3
+# App Version: 1.4.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -7,7 +7,7 @@ import plotly.express as px
 # Initialize SQLite connection
 conn = sqlite3.connect(":memory:")
 
-APP_VERSION = "1.3.3"  # Define app version for easy version control
+APP_VERSION = "1.4.0"
 
 def preprocess_column_names(df):
     """Preprocess column names for database compatibility."""
@@ -88,24 +88,39 @@ def main():
             st.dataframe(schema)
 
             # Metrics selection
-            st.write("Select columns to analyze:")
+            st.write("Select metric to analyze:")
             columns_query = f"PRAGMA table_info({quote_table_name(selected_table)})"
             columns = pd.read_sql_query(columns_query, conn)["name"].tolist()
-            selected_columns = st.multiselect("Columns:", columns)
+            selected_metric = st.selectbox("Metric:", columns)
+
+            # Sort order
+            sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
+            sort_clause = "DESC" if sort_order == "Highest" else "ASC"
+
+            # Number of rows
+            row_limit = st.slider("Number of rows to display:", 5, 50, 10)
+
+            # Option to generate visualizations
+            generate_chart = st.checkbox("Generate Visualization")
 
             if st.button("Run Analysis"):
-                if selected_columns:
-                    query = f"SELECT {', '.join(selected_columns)} FROM {quote_table_name(selected_table)} LIMIT 10"
+                if selected_metric:
+                    query = f"SELECT * FROM {quote_table_name(selected_table)} ORDER BY {selected_metric} {sort_clause} LIMIT {row_limit}"
                     st.write("Generated Query:")
                     st.code(query)
                     try:
                         results = pd.read_sql_query(query, conn)
                         st.write("Query Results:")
                         st.dataframe(results)
+
+                        # Generate visualization if selected
+                        if generate_chart:
+                            fig = px.bar(results, x=results.columns[0], y=selected_metric, title="Visualization")
+                            st.plotly_chart(fig)
                     except Exception as e:
                         st.error(f"Error executing query: {e}")
                 else:
-                    st.warning("Please select columns to analyze.")
+                    st.warning("Please select a metric to analyze.")
     else:
         st.info("Upload a file to get started.")
 
