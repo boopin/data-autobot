@@ -1,4 +1,4 @@
-# App Version: 3.0.0
+# App Version: 3.2.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -23,7 +23,7 @@ def main():
     # Display App Header
     st.title("Data Autobot")
     st.write("**Empowering Decisions, One Insight at a Time**")
-    st.write("**Version: 3.0.0**")
+    st.write("**Version: 3.2.0**")
 
     # File Upload
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
@@ -105,17 +105,43 @@ def generate_analysis_ui():
             sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
             row_limit = st.slider("Rows to display:", 5, 50, 10)
 
-        # Comparison UI
-        with st.expander("Enable Comparison", expanded=False):
-            st.write("Compare two custom date ranges.")
-            col_comp1, col_comp2 = st.columns(2)
-            with col_comp1:
-                period_start = st.date_input("Start Date:")
-            with col_comp2:
-                period_end = st.date_input("End Date:")
+        # Comparison Toggle
+        enable_comparison = st.checkbox("Enable Comparison")
+        if enable_comparison:
+            st.markdown("### Comparison Settings")
+            compare_type = st.selectbox("Comparison Type:", ["Weekly", "Monthly", "Quarterly"])
+            if compare_type:
+                agg_table_name = f"{selected_table}_{compare_type.lower()}"
+                periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {quote_table_name(agg_table_name)} ORDER BY {compare_type.lower()}"
+                try:
+                    periods = pd.read_sql_query(periods_query, conn)[compare_type.lower()].tolist()
 
-            if st.button("Run Comparison") and period_start and period_end:
-                run_comparison(selected_table, selected_metric, period_start, period_end)
+                    col_comp1, col_comp2 = st.columns(2)
+                    with col_comp1:
+                        period_1 = st.selectbox("Select Period 1:", periods)
+                    with col_comp2:
+                        period_2 = st.selectbox("Select Period 2:", periods)
+
+                    if period_1 and period_2:
+                        compare_query = f"""
+                        SELECT '{period_1}' AS period, SUM({selected_metric}) AS total
+                        FROM {quote_table_name(agg_table_name)} WHERE {compare_type.lower()} = '{period_1}'
+                        UNION ALL
+                        SELECT '{period_2}' AS period, SUM({selected_metric}) AS total
+                        FROM {quote_table_name(agg_table_name)} WHERE {compare_type.lower()} = '{period_2}'
+                        """
+                        comparison_results = pd.read_sql_query(compare_query, conn)
+                        comparison_results["% Change"] = (
+                            comparison_results["total"].pct_change().fillna(0) * 100
+                        ).round(2)
+                        st.write("Comparison Results:")
+                        st.dataframe(comparison_results)
+
+                        # Visualization for Comparison
+                        if st.checkbox("Generate Visualization for Comparison"):
+                            generate_visualization(comparison_results, "total")
+                except Exception as e:
+                    st.error(f"Error retrieving periods: {e}")
 
         # Run Analysis Button
         if st.button("Run Analysis"):
@@ -137,23 +163,6 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
             generate_visualization(results, metric)
     except Exception as e:
         st.error(f"Error executing query: {e}")
-
-def run_comparison(table, metric, start_date, end_date):
-    """Run a comparison analysis."""
-    try:
-        query = f"""
-        SELECT date, SUM({metric}) AS total
-        FROM {quote_table_name(table)}
-        WHERE date BETWEEN '{start_date}' AND '{end_date}'
-        GROUP BY date
-        """
-        results = pd.read_sql_query(query, conn)
-        st.write("Comparison Results:")
-        st.dataframe(results)
-        if st.checkbox("Generate Visualization for Comparison"):
-            generate_visualization(results, "total")
-    except Exception as e:
-        st.error(f"Error executing comparison query: {e}")
 
 if __name__ == "__main__":
     main()
