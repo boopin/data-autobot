@@ -1,175 +1,109 @@
-# App Version: 2.3.0
+# App Version: 2.0
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
+from datetime import datetime
 
-# Configure SQLite connection
-conn = sqlite3.connect(":memory:")
+def create_database_connection():
+    """Create an SQLite in-memory database connection."""
+    return sqlite3.connect(":memory:")
 
-def quote_table_name(table_name):
-    """Properly quote table names for SQLite."""
-    return f'"{table_name}"'
+def preprocess_dataframe(df):
+    """Preprocess the dataframe for database compatibility."""
+    df.columns = [col.lower().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+def load_file(file):
+    """Load the uploaded file into the database."""
+    conn = create_database_connection()
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file)
+        df = preprocess_dataframe(df)
+        table_name = file.name.replace(".csv", "").replace(" ", "_").lower()
+        df.to_sql(table_name, conn, index=False, if_exists="replace")
+    elif file.name.endswith(".xlsx"):
+        excel_data = pd.ExcelFile(file)
+        for sheet_name in excel_data.sheet_names:
+            df = excel_data.parse(sheet_name)
+            df = preprocess_dataframe(df)
+            table_name = sheet_name.replace(" ", "_").lower()
+            df.to_sql(table_name, conn, index=False, if_exists="replace")
+    return conn
+
+def get_table_names(conn):
+    """Retrieve table names from the database."""
+    query = "SELECT name FROM sqlite_master WHERE type='table';"
+    return [row[0] for row in conn.execute(query).fetchall()]
+
+def get_table_schema(conn, table_name):
+    """Retrieve the schema of a specific table."""
+    query = f"PRAGMA table_info({table_name});"
+    columns = [row[1] for row in conn.execute(query).fetchall()]
+    return columns
+
+def run_analysis_query(conn, table_name, selected_metric, display_columns, rows, sort_order):
+    """Run a query to fetch the analysis data."""
+    sort_column = f"{selected_metric} DESC" if sort_order == "Highest" else f"{selected_metric} ASC"
+    selected_columns = ", ".join(display_columns)
+    query = f"SELECT {selected_columns} FROM {table_name} ORDER BY {sort_column} LIMIT {rows}"
+    return pd.read_sql_query(query, conn)
+
+def create_visualization(df):
+    """Generate a Plotly visualization based on the query result."""
+    if len(df.columns) < 2:
+        st.warning("Data must have at least two columns for visualization.")
+        return None
+    chart = px.bar(
+        df,
+        x=df.columns[0],
+        y=df.columns[1],
+        title="Generated Visualization",
+        labels={df.columns[0]: "Category", df.columns[1]: "Value"}
+    )
+    return chart
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.3.0")
+    st.write("Version: 2.0")
 
-    uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
-    
-    if uploaded_file:
-        try:
-            if uploaded_file.name.endswith(".csv"):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file, sheet_name=None)
-            
-            # Process all sheets or a single DataFrame
-            if isinstance(df, dict):
-                st.write("Detected multiple sheets in the uploaded file.")
-                for sheet_name, sheet_df in df.items():
-                    process_and_store(sheet_df, sheet_name)
-            else:
-                process_and_store(df, uploaded_file.name.split('.')[0])
+    uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+    if not uploaded_file:
+        st.warning("Please upload a file to proceed.")
+        return
 
-            st.success("File successfully processed and saved to the database!")
-            generate_analysis_ui()
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-
-def process_and_store(df, table_name):
-    """Process the DataFrame and store it in the SQLite database."""
-    # Clean column names
-    df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
-
-    # Handle date column
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["week"] = df["date"].dt.to_period("W").astype(str)
-        df["month"] = df["date"].dt.to_period("M").astype(str)
-        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-    
-    # Save to database
-    df.to_sql(table_name, conn, if_exists="replace", index=False)
-    st.write(f"Table '{table_name}' created in the database.")
-
-def generate_analysis_ui():
-    """Generate UI for data analysis."""
-    # Get available tables
-    tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
-    tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
-
-    selected_table = st.selectbox("Select table to analyze:", tables)
+    conn = load_file(uploaded_file)
+    table_names = get_table_names(conn)
+    selected_table = st.selectbox("Select Table to Analyze", table_names)
 
     if selected_table:
-        # Get table schema
-        columns_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
-        schema = pd.read_sql_query(columns_query, conn)
-        columns = schema["name"].tolist()
+        schema = get_table_schema(conn, selected_table)
+        st.write(f"Schema for `{selected_table}`:", schema)
 
-        st.write(f"Schema for '{selected_table}': {columns}")
+        metric_options = [col for col in schema if "int" in str(conn.execute(f"PRAGMA table_info({selected_table})").fetchall())]
+        selected_metric = st.selectbox("Select Metric to Analyze", metric_options)
+        display_columns = st.multiselect("Select Columns to Display", schema)
+        rows_to_display = st.slider("Rows to Display", 5, 50, 10)
+        sort_order = st.radio("Sort By", ["Highest", "Lowest"])
 
-        # Metric selection
-        selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
-
-        # Comparison Option
-        if st.checkbox("Enable Comparison"):
-            enable_comparison_ui(selected_table, selected_metric)
-
-        # Additional columns for output
-        additional_columns = st.multiselect(
-            "Select additional columns to include in the output:",
-            [col for col in columns if col != selected_metric]
-        )
-
-        # Date aggregation options
-        date_columns = [col for col in ["date", "week", "month", "quarter"] if col in columns]
-        aggregation_type = st.selectbox("Select aggregation type (if applicable):", ["None"] + date_columns)
-
-        # Sorting and row limit
-        sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
-        row_limit = st.slider("Number of rows to display:", 5, 50, 10)
-
-        # Run Analysis Button
-        if st.button("Run Analysis"):
-            if selected_metric:
-                run_analysis(selected_table, columns, selected_metric, additional_columns, aggregation_type, sort_order, row_limit)
+        if st.button("Run Query"):
+            if selected_metric and display_columns:
+                query_result = run_analysis_query(conn, selected_table, selected_metric, display_columns, rows_to_display, sort_order)
+                st.write("### Query Results")
+                st.dataframe(query_result)
             else:
-                st.warning("Please select a metric to analyze.")
+                st.warning("Please select a metric and columns to display.")
 
-def enable_comparison_ui(selected_table, selected_metric):
-    """Generate UI for comparison between two periods."""
-    compare_type = st.selectbox("Select comparison type:", ["Weekly", "Monthly", "Quarterly"])
-    periods = get_distinct_periods(selected_table, compare_type.lower())
+        if st.button("Generate Visualization"):
+            if not query_result.empty:
+                chart = create_visualization(query_result)
+                st.plotly_chart(chart, use_container_width=True)
+            else:
+                st.warning("No data to visualize. Please run a query first.")
 
-    if periods:
-        period1 = st.selectbox(f"Select Period 1 ({compare_type}):", periods)
-        period2 = st.selectbox(f"Select Period 2 ({compare_type}):", periods)
-
-        if st.button("Compare Periods"):
-            run_comparison(selected_table, selected_metric, compare_type.lower(), period1, period2)
-    else:
-        st.warning("No periods available for comparison.")
-
-def get_distinct_periods(table, period_type):
-    """Get distinct values for a specific period type."""
-    query = f"SELECT DISTINCT {period_type} FROM {quote_table_name(table)} ORDER BY {period_type}"
-    try:
-        return pd.read_sql_query(query, conn)[period_type].tolist()
-    except Exception as e:
-        st.error(f"Error retrieving periods: {e}")
-        return []
-
-def run_analysis(table, columns, metric, additional_columns, aggregation_type, sort_order, row_limit):
-    """Run the analysis and generate output."""
-    try:
-        select_columns = [metric] + additional_columns
-        if aggregation_type != "None":
-            select_columns.insert(0, aggregation_type)
-
-        sort_clause = "DESC" if sort_order == "Highest" else "ASC"
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
-        
-        st.write("Generated Query:")
-        st.code(query)
-
-        results = pd.read_sql_query(query, conn)
-        st.write("Query Results:")
-        st.dataframe(results)
-
-        # Generate visualization
-        if st.checkbox("Generate Visualization"):
-            fig = px.bar(results, x=results.columns[0], y=metric, title="Visualization")
-            st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"Error executing query: {e}")
-
-def run_comparison(table, metric, compare_type, period1, period2):
-    """Run comparison between two periods."""
-    try:
-        query = f"""
-        SELECT '{period1}' AS period, SUM({metric}) AS total FROM {quote_table_name(table)}
-        WHERE {compare_type} = '{period1}'
-        UNION ALL
-        SELECT '{period2}' AS period, SUM({metric}) AS total FROM {quote_table_name(table)}
-        WHERE {compare_type} = '{period2}'
-        """
-        
-        st.write("Generated Comparison Query:")
-        st.code(query)
-
-        results = pd.read_sql_query(query, conn)
-        results["% Change"] = results["total"].pct_change().fillna(0) * 100
-
-        st.write("Comparison Results:")
-        st.dataframe(results)
-
-        # Generate visualization
-        if st.checkbox("Generate Comparison Visualization"):
-            fig = px.bar(results, x="period", y="total", title=f"Comparison: {period1} vs {period2}")
-            st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"Error executing comparison query: {e}")
+    conn.close()
 
 if __name__ == "__main__":
     main()
