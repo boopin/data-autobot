@@ -1,4 +1,4 @@
-# App Version: 2.3.2
+# App Version: 2.4.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,7 +21,7 @@ def generate_visualization(results, metric):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.3.2")
+    st.write("Version: 2.4.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -86,7 +86,7 @@ def save_aggregated_view(df, table_name, period_col, suffix):
 def generate_analysis_ui():
     """Generate UI for data analysis."""
     # Display version number
-    st.write("**Version: 2.3.2**")
+    st.write("**Version: 2.4.0**")
 
     # Get available tables
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
@@ -102,24 +102,30 @@ def generate_analysis_ui():
 
         st.write(f"Schema for '{selected_table}': {columns}")
 
+        # Start Multi-Column Layout
+        col1, col2, col3 = st.columns(3)
+
         # Metric selection
-        selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+        with col1:
+            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
 
         # Additional columns for output
-        additional_columns = st.multiselect(
-            "Select additional columns to include in the output:",
-            [col for col in columns if col != selected_metric]
-        )
+        with col2:
+            additional_columns = st.multiselect(
+                "Select additional columns:",
+                [col for col in columns if col != selected_metric]
+            )
 
         # Sorting and row limit
-        sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
-        row_limit = st.slider("Number of rows to display:", 5, 50, 10)
+        with col3:
+            sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
+            row_limit = st.slider("Rows to display:", 5, 50, 10)
 
-        # Enable Comparison
-        if st.checkbox("Enable Comparison"):
+        # Comparison Options in an Expander
+        with st.expander("Enable Comparison", expanded=False):
             compare_type = st.selectbox("Comparison Type:", ["Weekly", "Monthly", "Quarterly"])
             if compare_type:
-                agg_table_name = f"{selected_table}_{compare_type.lower()}"  # Correctly form the table name
+                agg_table_name = f"{selected_table}_{compare_type.lower()}"
                 periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {quote_table_name(agg_table_name)} ORDER BY {compare_type.lower()}"
                 try:
                     periods = pd.read_sql_query(periods_query, conn)[compare_type.lower()].tolist()
