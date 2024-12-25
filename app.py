@@ -1,4 +1,4 @@
-# App Version: 1.4.0
+# App Version: 1.5.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -47,13 +47,13 @@ def create_aggregations(table_name, conn):
             agg_df = df.groupby(period).sum(numeric_only=True).reset_index()
             agg_df.to_sql(agg_table_name, conn, if_exists="replace", index=False)
 
-        st.success(f"Aggregated tables created for '{table_name}': weekly, monthly, and quarterly.")
+        st.success(f"Aggregated tables created for '{table_name}': daily, weekly, monthly, and quarterly.")
     else:
         st.warning(f"Table '{table_name}' does not contain a 'date' column. Skipping aggregation.")
 
 def main():
     st.title("Data Analysis App with SQLite")
-    st.markdown("Version 1.4.0")
+    st.markdown("Version 1.5.0")
 
     conn = sqlite3.connect(DATABASE)
 
@@ -81,7 +81,6 @@ def main():
     numeric_columns = [col for col in columns if col != "date"]
 
     if "date" in columns:
-        # Aggregation type menu for tables with a date column
         aggregation_type = st.selectbox("Select aggregation type:", ["Daily", "Weekly", "Monthly", "Quarterly", "Custom"])
         if aggregation_type == "Custom":
             start_date = st.date_input("Start date:")
@@ -89,7 +88,6 @@ def main():
         else:
             agg_table = f"{selected_table}_{aggregation_type.lower()}"
     else:
-        # Adjust dropdowns for tables without a date column
         aggregation_type = None
         st.info("This table does not support date-based analysis.")
 
@@ -97,6 +95,13 @@ def main():
     columns_to_display = st.multiselect("Select Columns to Display:", columns, default=columns[:3])
     sort_order = st.selectbox("Sort By:", ["Highest", "Lowest"])
     rows_to_display = st.selectbox("Number of rows to display:", [5, 10, 25, 50])
+
+    comparison_enabled = st.checkbox("Enable Comparison")
+    if comparison_enabled:
+        compare_type = st.selectbox("Select Comparison Type:", ["Weekly", "Monthly", "Quarterly", "Custom"])
+        if compare_type == "Custom":
+            compare_start = st.date_input("Comparison Start Date:")
+            compare_end = st.date_input("Comparison End Date:")
 
     if st.button("Generate"):
         if aggregation_type in ["Daily", "Weekly", "Monthly", "Quarterly"] and "date" in columns:
@@ -113,6 +118,13 @@ def main():
             WHERE date BETWEEN '{start_date}' AND '{end_date}' 
             ORDER BY {metric} {'DESC' if sort_order == 'Highest' else 'ASC'} 
             LIMIT {rows_to_display}
+            """
+        elif comparison_enabled and compare_type in ["Weekly", "Monthly", "Quarterly"]:
+            query = f"""
+            SELECT {compare_type.lower()}, SUM({metric}) as total 
+            FROM {selected_table}_{compare_type.lower()} 
+            WHERE {compare_type.lower()} BETWEEN '{compare_start}' AND '{compare_end}' 
+            GROUP BY {compare_type.lower()}
             """
         else:
             query = f"""
