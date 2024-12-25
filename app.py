@@ -11,6 +11,14 @@ def quote_table_name(table_name):
     """Properly quote table names for SQLite."""
     return f'"{table_name}"'
 
+def generate_visualization(results, metric):
+    """Generate visualization for results."""
+    if not results.empty:
+        fig = px.bar(results, x=results.columns[0], y=metric, title=f"Visualization of {metric}")
+        st.plotly_chart(fig)
+    else:
+        st.warning("No data available to generate visualization.")
+
 def main():
     st.title("Data Autobot")
     st.write("Version: 2.3.0")
@@ -38,23 +46,48 @@ def main():
             st.error(f"Error loading file: {e}")
 
 def process_and_store(df, table_name):
-    """Process the DataFrame and store it in the SQLite database."""
+    """Process the DataFrame and store it in the SQLite database with aggregations."""
     # Clean column names
     df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
 
     # Handle date column
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df[df["date"].notnull()]  # Remove rows with invalid dates
+
+        # Add derived time periods
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-    
-    # Save to database
+
+        # Save aggregated views for weekly, monthly, and quarterly
+        save_aggregated_view(df, table_name, "week", "weekly")
+        save_aggregated_view(df, table_name, "month", "monthly")
+        save_aggregated_view(df, table_name, "quarter", "quarterly")
+
+    # Deduplicate the data
+    df = df.drop_duplicates()
+
+    # Save raw data to the database
     df.to_sql(table_name, conn, if_exists="replace", index=False)
-    st.write(f"Table '{table_name}' created in the database.")
+    st.write(f"Table '{table_name}' created in the database with raw and aggregated views.")
+
+def save_aggregated_view(df, table_name, period_col, suffix):
+    """Save aggregated views by period (weekly, monthly, quarterly)."""
+    try:
+        if period_col in df.columns:
+            agg_df = df.groupby(period_col).sum(numeric_only=True).reset_index()
+            agg_table_name = f"{table_name}_{suffix}"
+            agg_df.to_sql(agg_table_name, conn, if_exists="replace", index=False)
+            st.write(f"Aggregated table '{agg_table_name}' created successfully.")
+    except Exception as e:
+        st.warning(f"Could not create aggregated table for '{suffix}': {e}")
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
+    # Display version number
+    st.write("**Version: 2.3.0**")
+
     # Get available tables
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
     tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
@@ -70,55 +103,61 @@ def generate_analysis_ui():
         st.write(f"Schema for '{selected_table}': {columns}")
 
         # Metric selection
-        numeric_columns = [col for col in columns if col not in ["date", "week", "month", "quarter"]]
-        selected_metric = st.selectbox("Select metric to analyze:", numeric_columns, disabled=not numeric_columns)
+        selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
 
         # Additional columns for output
-        if selected_table == "all_posts" or not any(col in columns for col in ["date", "week", "month", "quarter"]):
-            additional_columns = st.multiselect(
-                "Select additional columns to include in the output:",
-                [col for col in columns if col != selected_metric]
-            )
-        else:
-            additional_columns = []
-
-        # Date aggregation options
-        date_columns = [col for col in ["date", "week", "month", "quarter"] if col in columns]
-        aggregation_type = st.selectbox("Select aggregation type (if applicable):", ["None"] + date_columns)
+        additional_columns = st.multiselect(
+            "Select additional columns to include in the output:",
+            [col for col in columns if col != selected_metric]
+        )
 
         # Sorting and row limit
         sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
         row_limit = st.slider("Number of rows to display:", 5, 50, 10)
 
-        # Comparison Section
-        enable_comparison = st.checkbox("Enable Comparison")
-        if enable_comparison:
-            comparison_type = st.radio("Select Comparison Type:", ["Weekly", "Monthly", "Quarterly", "Custom"])
-            period_1 = st.selectbox("Select Period 1", [])
-            period_2 = st.selectbox("Select Period 2", [])
+        # Enable Comparison
+        if st.checkbox("Enable Comparison"):
+            compare_type = st.selectbox("Comparison Type:", ["Weekly", "Monthly", "Quarterly"])
+            if compare_type:
+                periods_query = f"SELECT DISTINCT {compare_type.lower()} FROM {selected_table}_{compare_type.lower()} ORDER BY {compare_type.lower()}"
+                periods = pd.read_sql_query(periods_query, conn)[compare_type.lower()].tolist()
+
+                period_1 = st.selectbox("Select Period 1:", periods)
+                period_2 = st.selectbox("Select Period 2:", periods)
+
+                if period_1 and period_2:
+                    compare_query = f"""
+                    SELECT '{period_1}' AS period, SUM({selected_metric}) AS total
+                    FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{period_1}'
+                    UNION ALL
+                    SELECT '{period_2}' AS period, SUM({selected_metric}) AS total
+                    FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{period_2}'
+                    """
+                    try:
+                        comparison_results = pd.read_sql_query(compare_query, conn)
+                        comparison_results["% Change"] = (
+                            comparison_results["total"].pct_change().fillna(0) * 100
+                        ).round(2)
+                        st.write("Comparison Results:")
+                        st.dataframe(comparison_results)
+
+                        # Visualization for Comparison
+                        if st.checkbox("Generate Visualization for Comparison"):
+                            generate_visualization(comparison_results, "total")
+                    except Exception as e:
+                        st.error(f"Error executing comparison query: {e}")
 
         # Run Analysis Button
         if st.button("Run Analysis"):
             if selected_metric:
-                run_analysis(selected_table, columns, selected_metric, additional_columns, aggregation_type, sort_order, row_limit)
+                run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
             else:
                 st.warning("Please select a metric to analyze.")
 
-        # Generate Visualization
-        if st.button("Generate Visualization"):
-            if 'query_result' in locals() and not query_result.empty:
-                chart = create_visualization(query_result)
-                st.plotly_chart(chart, use_container_width=True)
-            else:
-                st.warning("No data to visualize. Please run a query first.")
-
-def run_analysis(table, columns, metric, additional_columns, aggregation_type, sort_order, row_limit):
+def run_analysis(table, metric, additional_columns, sort_order, row_limit):
     """Run the analysis and generate output."""
     try:
-        # Include date/aggregation columns and additional columns
         select_columns = [metric] + additional_columns
-        if aggregation_type != "None":
-            select_columns.insert(0, aggregation_type)
 
         sort_clause = "DESC" if sort_order == "Highest" else "ASC"
         query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
@@ -131,10 +170,9 @@ def run_analysis(table, columns, metric, additional_columns, aggregation_type, s
         st.write("Query Results:")
         st.dataframe(results)
 
-        # Visualization toggle
+        # Generate visualization
         if st.checkbox("Generate Visualization"):
-            fig = px.bar(results, x=results.columns[0], y=metric, title="Visualization")
-            st.plotly_chart(fig)
+            generate_visualization(results, metric)
     except Exception as e:
         st.error(f"Error executing query: {e}")
 
