@@ -1,4 +1,4 @@
-# App Version: 2.1
+# App Version: 2.2
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -75,9 +75,23 @@ def create_visualization(df):
     return chart
 
 
+def add_comparison(conn, table_name, metric, compare_type, period1, period2):
+    """Run a comparison query between two periods."""
+    query = f"""
+        SELECT '{period1}' AS period, SUM({metric}) AS total
+        FROM {table_name}_{compare_type}
+        WHERE {compare_type} = '{period1}'
+        UNION ALL
+        SELECT '{period2}' AS period, SUM({metric}) AS total
+        FROM {table_name}_{compare_type}
+        WHERE {compare_type} = '{period2}'
+    """
+    return pd.read_sql_query(query, conn)
+
+
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.1")
+    st.write("Version: 2.2")
 
     uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
     if not uploaded_file:
@@ -92,28 +106,38 @@ def main():
         schema, column_types = get_table_schema(conn, selected_table)
         st.write(f"Schema for `{selected_table}`:", schema)
 
-        # Filter numeric columns for metrics selection
-        numeric_columns = [schema[i] for i in range(len(schema)) if "int" in column_types[i] or "real" in column_types[i]]
-        if numeric_columns:
-            selected_metric = st.selectbox("Select Metric to Analyze", numeric_columns)
-        else:
-            selected_metric = None
-            st.warning("No numeric columns available for analysis in this table.")
+        # Metrics Dropdown
+        metrics_columns = [col for col, col_type in zip(schema, column_types) if "int" in col_type or "real" in col_type]
+        selected_metric = st.selectbox("Select Metric to Analyze", metrics_columns, disabled=not metrics_columns)
 
-        # Display columns for output
-        display_columns = st.multiselect("Select Columns to Display", schema, default=["date"] if "date" in schema else [])
+        # Display Columns Dropdown
+        additional_columns = st.multiselect("Select Additional Columns to Display", schema, default=["date"] if "date" in schema else [])
 
         # Additional user settings
         rows_to_display = st.slider("Rows to Display", 5, 50, 10)
         sort_order = st.radio("Sort By", ["Highest", "Lowest"])
 
+        # Comparison Section
+        comparison_enabled = st.checkbox("Enable Comparison")
+        if comparison_enabled:
+            compare_type = st.radio("Select Comparison Type", ["Weekly", "Monthly", "Quarterly"])
+            period1 = st.selectbox("Select Period 1", [])
+            period2 = st.selectbox("Select Period 2", [])
+
         if st.button("Run Query"):
-            if selected_metric and display_columns:
+            if selected_metric:
+                display_columns = [selected_metric] + additional_columns
                 query_result = run_analysis_query(conn, selected_table, selected_metric, display_columns, rows_to_display, sort_order)
                 st.write("### Query Results")
                 st.dataframe(query_result)
+
+                if comparison_enabled and period1 and period2:
+                    compare_result = add_comparison(conn, selected_table, selected_metric, compare_type, period1, period2)
+                    compare_result["Change (%)"] = ((compare_result["total"].iloc[1] - compare_result["total"].iloc[0]) / compare_result["total"].iloc[0]) * 100
+                    st.write("### Comparison Results")
+                    st.dataframe(compare_result)
             else:
-                st.warning("Please select a metric and columns to display.")
+                st.warning("Please select a metric to analyze.")
 
         if st.button("Generate Visualization"):
             if 'query_result' in locals() and not query_result.empty:
