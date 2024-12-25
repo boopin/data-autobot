@@ -1,4 +1,4 @@
-# App Version: 1.2.0
+# App Version: 1.2.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -22,9 +22,19 @@ def create_aggregated_tables(df, table_name):
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
 
-        df.groupby("week").sum().reset_index().to_sql(f"{table_name}_weekly", conn, index=False, if_exists="replace")
-        df.groupby("month").sum().reset_index().to_sql(f"{table_name}_monthly", conn, index=False, if_exists="replace")
-        df.groupby("quarter").sum().reset_index().to_sql(f"{table_name}_quarterly", conn, index=False, if_exists="replace")
+        # Exclude non-numeric columns for aggregation
+        numeric_columns = df.select_dtypes(include=["number"]).columns.tolist()
+
+        if numeric_columns:
+            df_weekly = df.groupby("week")[numeric_columns].sum().reset_index()
+            df_monthly = df.groupby("month")[numeric_columns].sum().reset_index()
+            df_quarterly = df.groupby("quarter")[numeric_columns].sum().reset_index()
+
+            df_weekly.to_sql(f"{table_name}_weekly", conn, index=False, if_exists="replace")
+            df_monthly.to_sql(f"{table_name}_monthly", conn, index=False, if_exists="replace")
+            df_quarterly.to_sql(f"{table_name}_quarterly", conn, index=False, if_exists="replace")
+        else:
+            st.warning(f"No numeric columns available for aggregation in table '{table_name}'.")
 
 def load_file(uploaded_file):
     """Loads and processes the uploaded file."""
@@ -114,4 +124,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
