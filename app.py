@@ -1,4 +1,4 @@
-# App Version: 1.5.3
+# App Version: 1.5.4
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -9,7 +9,7 @@ DATABASE = ":memory:"
 
 st.title("Data Autobot")
 st.subheader("Analyze Your Data with Ease")
-st.write("**App Version:** 1.5.3")
+st.write("**App Version:** 1.5.4")
 
 def preprocess_data(df):
     """Preprocess the DataFrame by cleaning column names and ensuring correct types."""
@@ -59,13 +59,6 @@ def load_data_to_sqlite(file, conn):
     except Exception as e:
         st.error(f"Error loading data: {e}")
 
-def generate_comparison_query(df, compare_type, selected_periods, metric):
-    """Generate SQL query for comparison based on user input."""
-    queries = []
-    for period in selected_periods:
-        queries.append(f"SELECT SUM({metric}) as total, '{period}' as period FROM {df} WHERE {compare_type} = '{period}'")
-    return " UNION ALL ".join(queries)
-
 def main():
     """Main function to handle the app flow."""
     uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
@@ -86,7 +79,7 @@ def main():
 
     columns_info = pd.read_sql_query(f"PRAGMA table_info({selected_table});", conn)
     columns = columns_info["name"].tolist()
-    
+
     if "date" in columns:
         aggregation_type = st.selectbox("Select aggregation type:", ["Daily", "Weekly", "Monthly", "Quarterly", "Custom"])
         metric = st.selectbox("Select metric to analyze:", [col for col in columns if pd.api.types.is_numeric_dtype(columns_info.loc[columns_info['name'] == col, 'type'])])
@@ -118,7 +111,11 @@ def main():
 
         if st.button("Compare"):
             if len(selected_periods) == 2:
-                comparison_query = generate_comparison_query(selected_table, compare_type.lower(), selected_periods, metric)
+                comparison_query = f"""
+                SELECT '{selected_periods[0]}' as period, SUM({metric}) as total FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{selected_periods[0]}'
+                UNION ALL
+                SELECT '{selected_periods[1]}' as period, SUM({metric}) as total FROM {selected_table}_{compare_type.lower()} WHERE {compare_type.lower()} = '{selected_periods[1]}'
+                """
                 try:
                     comparison_result = pd.read_sql_query(comparison_query, conn)
                     comparison_result["Change (%)"] = (
