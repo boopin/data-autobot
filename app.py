@@ -1,4 +1,4 @@
-# App Version: 2.1.0
+# App Version: 2.2.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -13,7 +13,7 @@ def quote_table_name(table_name):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.1.0")
+    st.write("Version: 2.2.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -73,17 +73,20 @@ def generate_analysis_ui():
         selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
 
         # Additional columns for output
-        if selected_table == "all_posts" or not any(col in columns for col in ["date", "week", "month", "quarter"]):
-            additional_columns = st.multiselect(
-                "Select additional columns to include in the output:",
-                [col for col in columns if col != selected_metric]
-            )
-        else:
-            additional_columns = []
+        additional_columns = st.multiselect(
+            "Select additional columns to include in the output:",
+            [col for col in columns if col != selected_metric]
+        )
 
         # Date aggregation options
         date_columns = [col for col in ["date", "week", "month", "quarter"] if col in columns]
         aggregation_type = st.selectbox("Select aggregation type (if applicable):", ["None"] + date_columns)
+
+        # Custom Time Periods
+        if aggregation_type != "None":
+            st.write(f"Custom {aggregation_type} Range")
+            start_period = st.selectbox(f"Start {aggregation_type}:", get_distinct_periods(selected_table, aggregation_type))
+            end_period = st.selectbox(f"End {aggregation_type}:", get_distinct_periods(selected_table, aggregation_type))
 
         # Sorting and row limit
         sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
@@ -92,11 +95,20 @@ def generate_analysis_ui():
         # Run Analysis Button
         if st.button("Run Analysis"):
             if selected_metric:
-                run_analysis(selected_table, columns, selected_metric, additional_columns, aggregation_type, sort_order, row_limit)
+                run_analysis(selected_table, columns, selected_metric, additional_columns, aggregation_type, sort_order, row_limit, start_period, end_period)
             else:
                 st.warning("Please select a metric to analyze.")
 
-def run_analysis(table, columns, metric, additional_columns, aggregation_type, sort_order, row_limit):
+def get_distinct_periods(table, period_type):
+    """Get distinct values for a specific period type."""
+    query = f"SELECT DISTINCT {period_type} FROM {quote_table_name(table)} ORDER BY {period_type}"
+    try:
+        return pd.read_sql_query(query, conn)[period_type].tolist()
+    except Exception as e:
+        st.error(f"Error retrieving periods: {e}")
+        return []
+
+def run_analysis(table, columns, metric, additional_columns, aggregation_type, sort_order, row_limit, start_period, end_period):
     """Run the analysis and generate output."""
     try:
         # Include date/aggregation columns and additional columns
@@ -104,8 +116,12 @@ def run_analysis(table, columns, metric, additional_columns, aggregation_type, s
         if aggregation_type != "None":
             select_columns.insert(0, aggregation_type)
 
+        where_clause = ""
+        if aggregation_type != "None" and start_period and end_period:
+            where_clause = f"WHERE {aggregation_type} BETWEEN '{start_period}' AND '{end_period}'"
+
         sort_clause = "DESC" if sort_order == "Highest" else "ASC"
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
+        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} {where_clause} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
         
         st.write("Generated Query:")
         st.code(query)
