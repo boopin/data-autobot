@@ -1,4 +1,4 @@
-# App Version: 2.3.1
+# App Version: 2.3.2
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,7 +21,7 @@ def generate_visualization(results, metric):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.3.1")
+    st.write("Version: 2.3.2")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -86,7 +86,7 @@ def save_aggregated_view(df, table_name, period_col, suffix):
 def generate_analysis_ui():
     """Generate UI for data analysis."""
     # Display version number
-    st.write("**Version: 2.3.1**")
+    st.write("**Version: 2.3.2**")
 
     # Get available tables
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
