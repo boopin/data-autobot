@@ -1,4 +1,4 @@
-# App Version: 2.2.0
+# App Version: 2.3.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -13,7 +13,7 @@ def quote_table_name(table_name):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.2.0")
+    st.write("Version: 2.3.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     
@@ -72,6 +72,10 @@ def generate_analysis_ui():
         # Metric selection
         selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
 
+        # Comparison Option
+        if st.checkbox("Enable Comparison"):
+            enable_comparison_ui(selected_table, selected_metric)
+
         # Additional columns for output
         additional_columns = st.multiselect(
             "Select additional columns to include in the output:",
@@ -82,12 +86,6 @@ def generate_analysis_ui():
         date_columns = [col for col in ["date", "week", "month", "quarter"] if col in columns]
         aggregation_type = st.selectbox("Select aggregation type (if applicable):", ["None"] + date_columns)
 
-        # Custom Time Periods
-        if aggregation_type != "None":
-            st.write(f"Custom {aggregation_type} Range")
-            start_period = st.selectbox(f"Start {aggregation_type}:", get_distinct_periods(selected_table, aggregation_type))
-            end_period = st.selectbox(f"End {aggregation_type}:", get_distinct_periods(selected_table, aggregation_type))
-
         # Sorting and row limit
         sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
         row_limit = st.slider("Number of rows to display:", 5, 50, 10)
@@ -95,9 +93,23 @@ def generate_analysis_ui():
         # Run Analysis Button
         if st.button("Run Analysis"):
             if selected_metric:
-                run_analysis(selected_table, columns, selected_metric, additional_columns, aggregation_type, sort_order, row_limit, start_period, end_period)
+                run_analysis(selected_table, columns, selected_metric, additional_columns, aggregation_type, sort_order, row_limit)
             else:
                 st.warning("Please select a metric to analyze.")
+
+def enable_comparison_ui(selected_table, selected_metric):
+    """Generate UI for comparison between two periods."""
+    compare_type = st.selectbox("Select comparison type:", ["Weekly", "Monthly", "Quarterly"])
+    periods = get_distinct_periods(selected_table, compare_type.lower())
+
+    if periods:
+        period1 = st.selectbox(f"Select Period 1 ({compare_type}):", periods)
+        period2 = st.selectbox(f"Select Period 2 ({compare_type}):", periods)
+
+        if st.button("Compare Periods"):
+            run_comparison(selected_table, selected_metric, compare_type.lower(), period1, period2)
+    else:
+        st.warning("No periods available for comparison.")
 
 def get_distinct_periods(table, period_type):
     """Get distinct values for a specific period type."""
@@ -108,25 +120,19 @@ def get_distinct_periods(table, period_type):
         st.error(f"Error retrieving periods: {e}")
         return []
 
-def run_analysis(table, columns, metric, additional_columns, aggregation_type, sort_order, row_limit, start_period, end_period):
+def run_analysis(table, columns, metric, additional_columns, aggregation_type, sort_order, row_limit):
     """Run the analysis and generate output."""
     try:
-        # Include date/aggregation columns and additional columns
         select_columns = [metric] + additional_columns
         if aggregation_type != "None":
             select_columns.insert(0, aggregation_type)
 
-        where_clause = ""
-        if aggregation_type != "None" and start_period and end_period:
-            where_clause = f"WHERE {aggregation_type} BETWEEN '{start_period}' AND '{end_period}'"
-
         sort_clause = "DESC" if sort_order == "Highest" else "ASC"
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} {where_clause} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
+        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
         
         st.write("Generated Query:")
         st.code(query)
 
-        # Execute query
         results = pd.read_sql_query(query, conn)
         st.write("Query Results:")
         st.dataframe(results)
@@ -137,6 +143,33 @@ def run_analysis(table, columns, metric, additional_columns, aggregation_type, s
             st.plotly_chart(fig)
     except Exception as e:
         st.error(f"Error executing query: {e}")
+
+def run_comparison(table, metric, compare_type, period1, period2):
+    """Run comparison between two periods."""
+    try:
+        query = f"""
+        SELECT '{period1}' AS period, SUM({metric}) AS total FROM {quote_table_name(table)}
+        WHERE {compare_type} = '{period1}'
+        UNION ALL
+        SELECT '{period2}' AS period, SUM({metric}) AS total FROM {quote_table_name(table)}
+        WHERE {compare_type} = '{period2}'
+        """
+        
+        st.write("Generated Comparison Query:")
+        st.code(query)
+
+        results = pd.read_sql_query(query, conn)
+        results["% Change"] = results["total"].pct_change().fillna(0) * 100
+
+        st.write("Comparison Results:")
+        st.dataframe(results)
+
+        # Generate visualization
+        if st.checkbox("Generate Comparison Visualization"):
+            fig = px.bar(results, x="period", y="total", title=f"Comparison: {period1} vs {period2}")
+            st.plotly_chart(fig)
+    except Exception as e:
+        st.error(f"Error executing comparison query: {e}")
 
 if __name__ == "__main__":
     main()
