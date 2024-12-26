@@ -1,4 +1,4 @@
-# App Version: 2.6.1
+# App Version: 2.7.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -24,6 +24,32 @@ def get_table_columns(table_name, exclude=None):
         columns = [col for col in columns if col not in exclude]
     return columns
 
+def generate_individual_metric_analysis(table_name):
+    """Generate UI for individual metrics analysis."""
+    st.subheader("Individual Metrics Analysis")
+    metric = st.selectbox(
+        "Select metric to analyze:",
+        get_table_columns(table_name, exclude=["date"]),
+        key="individual_metric"
+    )
+    sort_order = st.radio("Sort order:", ["Highest", "Lowest"], index=0)
+    row_limit = st.slider("Rows to display:", min_value=5, max_value=50, value=10)
+
+    if st.button("Run Analysis", key="run_individual_analysis"):
+        sort_clause = "DESC" if sort_order == "Highest" else "ASC"
+        query = f"""
+        SELECT date, {quote_column_name(metric)}
+        FROM {quote_table_name(table_name)}
+        ORDER BY {quote_column_name(metric)} {sort_clause}
+        LIMIT {row_limit};
+        """
+        results = pd.read_sql_query(query, conn)
+        st.write("Query Results:")
+        st.dataframe(results)
+
+        if st.checkbox("Generate Visualization", key="individual_visualization"):
+            generate_visualization(results, metric)
+
 def generate_visualization(results, y_metric, optional_metric=None):
     """Generate combined bar and line visualization."""
     try:
@@ -31,12 +57,12 @@ def generate_visualization(results, y_metric, optional_metric=None):
             fig = go.Figure()
 
             # Add bar chart
-            fig.add_bar(x=results["period"], y=results[y_metric], name=y_metric)
+            fig.add_bar(x=results[results.columns[0]], y=results[y_metric], name=y_metric)
 
             # Add line chart if optional metric exists
             if optional_metric:
                 fig.add_scatter(
-                    x=results["period"], y=results[optional_metric],
+                    x=results[results.columns[0]], y=results[optional_metric],
                     name=optional_metric, mode="lines+markers", yaxis="y2"
                 )
                 # Update layout for dual y-axis
@@ -47,14 +73,13 @@ def generate_visualization(results, y_metric, optional_metric=None):
                         overlaying="y",
                         side="right"
                     ),
-                    title=f"{y_metric} (Bar) and {optional_metric} (Line) Over Periods"
+                    title=f"{y_metric} (Bar) and {optional_metric} (Line)"
                 )
             else:
                 fig.update_layout(
-                    title=f"Visualization of {y_metric} Over Periods"
+                    title=f"Visualization of {y_metric}"
                 )
 
-            # Show chart
             st.plotly_chart(fig)
         else:
             st.warning("No data available for visualization.")
@@ -125,7 +150,6 @@ def generate_comparison_ui(table_name):
             )
 
         if st.button("Generate Combined Visualization", key="generate_comparison"):
-            # Build the SQL query
             query = f"""
             SELECT '{custom_name_1}' AS period, 
                    SUM({quote_column_name(metric_bar)}) AS {metric_bar}
@@ -182,7 +206,7 @@ def generate_extended_visualization_ui(table_name):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.1")
+    st.write("**Version:** 2.7.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
@@ -193,6 +217,7 @@ def main():
         selected_table = st.selectbox("Select table to analyze:", tables, key="table_selector")
 
         if selected_table:
+            generate_individual_metric_analysis(selected_table)
             generate_comparison_ui(selected_table)
             generate_extended_visualization_ui(selected_table)
 
