@@ -1,8 +1,8 @@
-# App Version: 2.6.1
+# App Version: 2.6.2
 import streamlit as st
 import pandas as pd
 import sqlite3
-import plotly.express as px
+import plotly.graph_objects as go
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -10,7 +10,7 @@ conn = sqlite3.connect(":memory:")
 # App Metadata
 APP_NAME = "Data Autobot"
 TAGLINE = "Unlock insights at the speed of thought!"
-VERSION = "2.6.1"
+VERSION = "2.6.2"
 
 
 def quote_table_name(table_name):
@@ -26,22 +26,35 @@ def quote_column_name(column_name):
 def generate_visualization(results, metric, optional_metric=None):
     """Generate visualization for results."""
     if not results.empty:
-        fig = px.bar(
-            results,
-            x=results.columns[0],
-            y=metric,
-            title=f"Visualization of {metric}",
-            labels={results.columns[0]: "Date/Category", metric: "Value"},
+        fig = go.Figure()
+
+        # Add bar chart
+        fig.add_bar(
+            x=results[results.columns[0]],
+            y=results[metric],
+            name=metric,
         )
 
+        # Add line chart (optional)
         if optional_metric:
-            fig.add_scatter(
-                x=results[results.columns[0]],
-                y=results[optional_metric],
-                mode="lines",
-                name=optional_metric,
-                line_shape="spline",
+            fig.add_trace(
+                go.Scatter(
+                    x=results[results.columns[0]],
+                    y=results[optional_metric],
+                    name=optional_metric,
+                    mode="lines",
+                    yaxis="y2",  # Add secondary y-axis
+                )
             )
+
+        # Update layout for dual-axis
+        fig.update_layout(
+            title=f"Visualization of {metric}" + (f" and {optional_metric}" if optional_metric else ""),
+            xaxis_title="Date/Category",
+            yaxis=dict(title=metric),
+            yaxis2=dict(title=optional_metric, overlaying="y", side="right"),
+            legend=dict(x=0, y=1.2, orientation="h"),
+        )
 
         st.plotly_chart(fig)
     else:
@@ -108,40 +121,22 @@ def generate_analysis_ui():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"])
+            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"], key="metric_analysis")
 
         with col2:
-            additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
+            additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric], key="additional_columns")
 
         with col3:
-            sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
-            row_limit = st.slider("Rows to display:", 5, 50, 10)
+            sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"], key="sort_order")
+            row_limit = st.slider("Rows to display:", 5, 50, 10, key="row_limit")
 
-        if st.button("Run Analysis"):
+        if st.button("Run Analysis", key="run_analysis"):
             if selected_metric:
                 run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
             else:
                 st.warning("Please select a metric to analyze.")
 
-        generate_extended_visualization_ui(selected_table)
         generate_comparison_ui(selected_table)
-
-
-def generate_extended_visualization_ui(table_name):
-    """Extended visualization for larger periods."""
-    st.subheader("Extended Visualization")
-    metric_bar = st.selectbox("Select metric for bar chart:", get_table_columns(table_name, exclude=["date"]))
-    metric_line = st.selectbox("Select metric for line chart (optional):", ["None"] + get_table_columns(table_name, exclude=["date"]))
-
-    time_period = st.selectbox("Select time period:", ["week", "month", "quarter"])
-    if st.button("Generate Extended Visualization"):
-        query = f"SELECT {time_period}, SUM({quote_column_name(metric_bar)}) AS {metric_bar}"
-        if metric_line != "None":
-            query += f", SUM({quote_column_name(metric_line)}) AS {metric_line}"
-        query += f" FROM {quote_table_name(table_name)} GROUP BY {time_period} ORDER BY {time_period}"
-        results = pd.read_sql_query(query, conn)
-        st.dataframe(results)
-        generate_visualization(results, metric_bar, optional_metric=(metric_line if metric_line != "None" else None))
 
 
 def generate_comparison_ui(table_name):
@@ -149,22 +144,22 @@ def generate_comparison_ui(table_name):
     with st.expander("Enable Comparison", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
-            start_date_1 = st.date_input("Start Date for Period 1")
-            end_date_1 = st.date_input("End Date for Period 1")
+            start_date_1 = st.date_input("Start Date for Period 1", key="start_date_1")
+            end_date_1 = st.date_input("End Date for Period 1", key="end_date_1")
         with col2:
-            start_date_2 = st.date_input("Start Date for Period 2")
-            end_date_2 = st.date_input("End Date for Period 2")
+            start_date_2 = st.date_input("Start Date for Period 2", key="start_date_2")
+            end_date_2 = st.date_input("End Date for Period 2", key="end_date_2")
 
-        custom_name_1 = st.text_input("Custom Name for Period 1", "Period 1")
-        custom_name_2 = st.text_input("Custom Name for Period 2", "Period 2")
+        custom_name_1 = st.text_input("Custom Name for Period 1", "Period 1", key="custom_name_1")
+        custom_name_2 = st.text_input("Custom Name for Period 2", "Period 2", key="custom_name_2")
 
         col1, col2 = st.columns(2)
         with col1:
-            metric_bar = st.selectbox("Select metric for bar chart:", get_table_columns(table_name, exclude=["date"]))
+            metric_bar = st.selectbox("Select metric for bar chart:", get_table_columns(table_name, exclude=["date"]), key="metric_bar_comparison")
         with col2:
-            metric_line = st.selectbox("Select metric for line chart (optional):", ["None"] + get_table_columns(table_name, exclude=["date"]))
+            metric_line = st.selectbox("Select metric for line chart (optional):", ["None"] + get_table_columns(table_name, exclude=["date"]), key="metric_line_comparison")
 
-        if st.button("Generate Combined Visualization"):
+        if st.button("Generate Combined Visualization", key="generate_combined"):
             query = f"""
             SELECT '{custom_name_1}' AS period, SUM({quote_column_name(metric_bar)}) AS {metric_bar}
             FROM {quote_table_name(table_name)}
