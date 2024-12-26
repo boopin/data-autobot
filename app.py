@@ -1,9 +1,8 @@
-# App Version: 2.5.1
+# App Version: 2.5.0
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
-import chardet
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -23,16 +22,13 @@ def generate_visualization(results, metric):
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
     try:
+        # Detect encoding and read file
         if uploaded_file.name.endswith(".csv"):
-            # Detect encoding using chardet
-            raw_data = uploaded_file.read()
-            detected_encoding = chardet.detect(raw_data)["encoding"]
-            st.info(f"Detected file encoding: {detected_encoding}")
-            uploaded_file.seek(0)  # Reset file pointer
-            df = pd.read_csv(uploaded_file, encoding=detected_encoding)
+            df = pd.read_csv(uploaded_file, encoding="utf-8", engine="python", on_bad_lines="skip")
         else:
             df = pd.read_excel(uploaded_file, sheet_name=None)
         
+        # Process multiple sheets or single DataFrame
         if isinstance(df, dict):
             st.write("Detected multiple sheets in the uploaded file.")
             for sheet_name, sheet_df in df.items():
@@ -41,26 +37,35 @@ def process_uploaded_file(uploaded_file):
             process_and_store(df, uploaded_file.name.split('.')[0])
 
         st.success("File successfully processed and saved to the database!")
-    except UnicodeDecodeError as e:
-        st.error(f"Error decoding file: {e}. Please upload a valid file.")
+    except UnicodeDecodeError:
+        st.error("File encoding not supported. Please ensure the file is UTF-8 encoded.")
     except Exception as e:
         st.error(f"Error loading file: {e}")
 
 def process_and_store(df, table_name):
     """Process the DataFrame and store it in the SQLite database with aggregations."""
+    # Sanitize column headers
     df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
 
+    # Remove invalid rows and duplicates
+    df = df.dropna(how="all").drop_duplicates()
+
+    # Check for date column
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notnull()]
+        df = df[df["date"].notnull()]  # Remove invalid dates
+
+        # Add derived time periods
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
+
+        # Save aggregated views
         save_aggregated_view(df, table_name, "week", "weekly")
         save_aggregated_view(df, table_name, "month", "monthly")
         save_aggregated_view(df, table_name, "quarter", "quarterly")
 
-    df = df.drop_duplicates()
+    # Save cleaned data to the database
     df.to_sql(table_name, conn, if_exists="replace", index=False)
     st.write(f"Table '{table_name}' created in the database with raw and aggregated views.")
 
@@ -124,7 +129,7 @@ def generate_comparison_ui(table_name):
             end_date_2 = st.date_input("End Date for Period 2")
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
-            custom_query = f"""
+            comparison_query = f"""
             SELECT 'Period 1' AS period, SUM(primary) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
@@ -133,7 +138,7 @@ def generate_comparison_ui(table_name):
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
-            execute_comparison_query(custom_query)
+            execute_comparison_query(comparison_query)
 
 def execute_comparison_query(query):
     """Execute the comparison query and display results."""
@@ -171,16 +176,13 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.5.1")
+    st.write("Version: 2.5.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
     if uploaded_file:
-        try:
-            process_uploaded_file(uploaded_file)
-            generate_analysis_ui()
-        except Exception as e:
-            st.error(f"Error: {e}")
+        process_uploaded_file(uploaded_file)
+        generate_analysis_ui()
 
 if __name__ == "__main__":
     main()
