@@ -1,4 +1,4 @@
-# App Version: 2.5.8
+# App Version: 2.6.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -25,7 +25,7 @@ def quote_column_name(column_name):
     return f'"{column_name}"'
 
 def generate_visualization(results, metric, title):
-    """Generate a single-metric visualization."""
+    """Generate visualization for a single metric."""
     try:
         if not results.empty:
             logger.info("Generating visualization...")
@@ -42,32 +42,6 @@ def generate_visualization(results, metric, title):
             logger.warning("No data available for visualization.")
     except Exception as e:
         logger.error(f"Error generating visualization: {e}")
-        st.error(f"Error generating visualization: {e}")
-
-def generate_combined_visualization(results, bar_metric, line_metric):
-    """Generate combined visualization for results."""
-    try:
-        if not results.empty:
-            logger.info("Generating combined visualization...")
-            fig = px.bar(
-                results,
-                x=results.columns[0],
-                y=bar_metric,
-                title=f"Visualization of {bar_metric} (Bar) and {line_metric} (Line)",
-                labels={bar_metric: "Bar Values", line_metric: "Line Values", results.columns[0]: "Category"},
-            )
-            fig.add_scatter(
-                x=results[results.columns[0]],
-                y=results[line_metric],
-                mode='lines+markers',
-                name=line_metric,
-            )
-            st.plotly_chart(fig)
-        else:
-            st.warning("No data available to generate visualization.")
-            logger.warning("No data available for visualization.")
-    except Exception as e:
-        logger.error(f"Error generating combined visualization: {e}")
         st.error(f"Error generating visualization: {e}")
 
 def process_uploaded_file(uploaded_file):
@@ -146,6 +120,33 @@ def execute_comparison_query(query):
         logger.error(f"Error executing comparison query: {e}")
         st.error(f"Error executing comparison query: {e}")
 
+def generate_comparison_ui(table_name):
+    """Generate UI for enabling and running comparisons."""
+    st.subheader("Enable Comparison")
+    enable_comparison = st.checkbox("Toggle Comparison")
+
+    if enable_comparison:
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date_1 = st.date_input("Start Date for Period 1")
+            end_date_1 = st.date_input("End Date for Period 1")
+        with col2:
+            start_date_2 = st.date_input("Start Date for Period 2")
+            end_date_2 = st.date_input("End Date for Period 2")
+
+        if start_date_1 and end_date_1 and start_date_2 and end_date_2:
+            metric = st.selectbox("Select metric for comparison:", [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"])
+            comparison_query = f"""
+            SELECT 'Period 1' AS period, SUM({quote_column_name(metric)}) AS total
+            FROM {quote_table_name(table_name)}
+            WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
+            UNION ALL
+            SELECT 'Period 2' AS period, SUM({quote_column_name(metric)}) AS total
+            FROM {quote_table_name(table_name)}
+            WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
+            """
+            execute_comparison_query(comparison_query)
+
 def generate_analysis_ui():
     """Generate UI for data analysis."""
     try:
@@ -178,6 +179,8 @@ def generate_analysis_ui():
                     run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
                 else:
                     st.warning("Please select a metric to analyze.")
+
+            generate_comparison_ui(selected_table)
     except Exception as e:
         logger.error(f"Error in generating analysis UI: {e}")
         st.error(f"Error in generating analysis UI: {e}")
@@ -205,7 +208,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.5.8")
+    st.write("**Version:** 2.6.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
