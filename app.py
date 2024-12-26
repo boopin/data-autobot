@@ -15,6 +15,35 @@ def quote_column_name(column_name):
     """Properly quote column names for SQLite."""
     return f'"{column_name}"'
 
+def process_uploaded_file(uploaded_file):
+    """Process uploaded Excel or CSV file with multi-sheet support."""
+    try:
+        if uploaded_file.name.endswith('.xlsx'):
+            # Read all sheets from Excel file
+            excel_file = pd.ExcelFile(uploaded_file)
+            sheet_names = excel_file.sheet_names
+            
+            st.write(f"Found {len(sheet_names)} sheets in the Excel file:")
+            for sheet_name in sheet_names:
+                df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+                # Create table name from sheet name
+                table_name = f"{uploaded_file.name.split('.')[0]}_{sheet_name}".replace(' ', '_')
+                # Save each sheet to SQLite
+                df.to_sql(table_name, conn, if_exists='replace', index=False)
+                st.write(f"- {sheet_name}: {len(df)} rows, {len(df.columns)} columns")
+            
+            st.success(f"Successfully uploaded and processed {len(sheet_names)} sheets from {uploaded_file.name}")
+            
+        else:
+            # Process CSV file
+            df = pd.read_csv(uploaded_file)
+            table_name = uploaded_file.name.split('.')[0].replace(' ', '_')
+            df.to_sql(table_name, conn, if_exists='replace', index=False)
+            st.success(f"Successfully uploaded and processed {uploaded_file.name}")
+        
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+
 def generate_combined_visualization(df, bar_metric, line_metric, x_column, title):
     """Generate combined bar and line visualization."""
     try:
@@ -98,24 +127,6 @@ def generate_extended_visualization(table, bar_metric, line_metric, period_type,
 
     except Exception as e:
         st.error(f"Error generating extended visualization: {e}")
-
-def process_uploaded_file(uploaded_file):
-    """Process uploaded Excel or CSV file."""
-    try:
-        if uploaded_file.name.endswith('.xlsx'):
-            df = pd.read_excel(uploaded_file)
-        else:
-            df = pd.read_csv(uploaded_file)
-        
-        # Create table name from uploaded file
-        table_name = uploaded_file.name.split('.')[0].replace(' ', '_')
-        
-        # Save to SQLite
-        df.to_sql(table_name, conn, if_exists='replace', index=False)
-        st.success(f"Successfully uploaded and processed {uploaded_file.name}")
-        
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
 
 def enable_comparison(table, numeric_columns):
     """Enable comparison between different time periods."""
@@ -219,111 +230,119 @@ def generate_analysis_ui():
     st.header("Data Analysis")
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
     tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
-    selected_table = st.selectbox("Select table to analyze:", tables, key="table_select")
     
-    if selected_table:
-        columns_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
-        schema = pd.read_sql_query(columns_query, conn)
-        columns = schema["name"].tolist()
+    if tables:
+        st.subheader("Select Data for Analysis")
+        selected_table = st.selectbox(
+            "Choose a table/sheet to analyze:", 
+            tables, 
+            key="table_select",
+            help="Select the data table or Excel sheet you want to analyze"
+        )
         
-        numeric_columns = [col for col in columns if col not in ["date", "week", "month", "quarter"]]
-        
-        st.subheader("Metric Selection")
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_metric = st.selectbox(
-                "Primary metric for analysis:", 
-                numeric_columns,
-                key="primary_metric"
-            )
-        with col2:
-            additional_columns = st.multiselect(
-                "Additional columns for analysis:", 
-                [col for col in columns if col != selected_metric],
-                key="additional_cols"
-            )
+        if selected_table:
+            columns_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
+            schema = pd.read_sql_query(columns_query, conn)
+            columns = schema["name"].tolist()
             
-        # Enhanced row selection and sorting options
-        col1, col2 = st.columns(2)
-        with col1:
-            max_rows = st.slider(
-                "Number of rows to display", 
-                min_value=1, 
-                max_value=100, 
-                value=10,
-                help="Drag to select the number of rows you want to see in the output table"
-            )
-        with col2:
-            sort_order = st.selectbox(
-                "Sort order", 
-                ["High to Low", "Low to High"], 
-                index=0,
-                help="Choose how to sort your data"
-            )
+            numeric_columns = [col for col in columns if col not in ["date", "week", "month", "quarter"]]
             
-        if st.button("Run Analysis", key="run_analysis"):
-            st.subheader("Analysis Results")
-            run_analysis(selected_table, selected_metric, additional_columns, max_rows, 
-                        "DESC" if sort_order == "High to Low" else "ASC")
-            
-        st.markdown("---")
-        st.markdown("# 📈 Time Period Analysis & Visualization")
-        st.markdown("### Transform your data into powerful time-based insights")
-        with st.expander("Configure Time Period Analysis"):
-            st.subheader("Time Period Analysis")
-            bar_metric = st.selectbox(
-                "Bar chart metric (required):", 
-                numeric_columns,
-                key="extended_bar_metric"
-            )
-            
-            show_line_metric = st.checkbox("Add line metric?", key="show_extended_line_metric")
-            line_metric = None
-            if show_line_metric:
-                line_metric = st.selectbox(
-                    "Line chart metric:", 
-                    numeric_columns,
-                    key="extended_line_metric"
-                )
-                
-            period_type = st.selectbox(
-                "Time period:", 
-                ["week", "month", "quarter"],
-                key="extended_period_type"
-            )
-            
+            st.subheader("Metric Selection")
             col1, col2 = st.columns(2)
             with col1:
-                max_period_rows = st.slider(
-                    "Number of periods to display", 
-                    min_value=1, 
-                    max_value=100, 
-                    value=50,
-                    help="Drag to select the number of time periods to include"
+                selected_metric = st.selectbox(
+                    "Primary metric for analysis:", 
+                    numeric_columns,
+                    key="primary_metric"
                 )
             with col2:
-                period_sort_order = st.selectbox(
-                    "Sort periods by", 
+                additional_columns = st.multiselect(
+                    "Additional columns for analysis:", 
+                    [col for col in columns if col != selected_metric],
+                    key="additional_cols"
+                )
+                
+            # Enhanced row selection and sorting options
+            col1, col2 = st.columns(2)
+            with col1:
+                max_rows = st.slider(
+                    "Number of rows to display", 
+                    min_value=1, 
+                    max_value=100, 
+                    value=10,
+                    help="Drag to select the number of rows you want to see in the output table"
+                )
+            with col2:
+                sort_order = st.selectbox(
+                    "Sort order", 
                     ["High to Low", "Low to High"], 
                     index=0,
-                    help="Choose how to sort your time periods"
+                    help="Choose how to sort your data"
                 )
+                
+            if st.button("Run Analysis", key="run_analysis"):
+                st.subheader("Analysis Results")
+                run_analysis(selected_table, selected_metric, additional_columns, max_rows, 
+                            "DESC" if sort_order == "High to Low" else "ASC")
+                
+            st.markdown("---")
+            st.markdown("# 📈 Time Period Analysis & Visualization")
+            st.markdown("### Transform your data into powerful time-based insights")
+            with st.expander("Configure Time Period Analysis"):
+                st.subheader("Time Period Analysis")
+                bar_metric = st.selectbox(
+                    "Bar chart metric (required):", 
+                    numeric_columns,
+                    key="extended_bar_metric"
+                )
+                
+                show_line_metric = st.checkbox("Add line metric?", key="show_extended_line_metric")
+                line_metric = None
+                if show_line_metric:
+                    line_metric = st.selectbox(
+                        "Line chart metric:", 
+                        numeric_columns,
+                        key="extended_line_metric"
+                    )
+                    
+                period_type = st.selectbox(
+                    "Time period:", 
+                    ["week", "month", "quarter"],
+                    key="extended_period_type"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    max_period_rows = st.slider(
+                        "Number of periods to display", 
+                        min_value=1, 
+                        max_value=100, 
+                        value=50,
+                        help="Drag to select the number of time periods to include"
+                    )
+                with col2:
+                    period_sort_order = st.selectbox(
+                        "Sort periods by", 
+                        ["High to Low", "Low to High"], 
+                        index=0,
+                        help="Choose how to sort your time periods"
+                    )
+                
+                if st.button("Generate Extended Visualization", key="generate_extended"):
+                    generate_extended_visualization(
+                        selected_table, 
+                        bar_metric, 
+                        line_metric, 
+                        period_type,
+                        max_period_rows,
+                        "DESC" if period_sort_order == "High to Low" else "ASC"
+                    )
             
-            if st.button("Generate Extended Visualization", key="generate_extended"):
-                generate_extended_visualization(
-                    selected_table, 
-                    bar_metric, 
-                    line_metric, 
-                    period_type,
-                    max_period_rows,
-                    "DESC" if period_sort_order == "High to Low" else "ASC"
-                )
-        
-        st.markdown("---")
-        st.markdown("# 🔄 Comparative Analysis Hub")
-        st.markdown("### Discover insights through powerful period-over-period comparisons")
-        with st.expander("Configure Period Comparison"):
-            enable_comparison(selected_table, numeric_columns)
+            st.markdown("---")
+            st.markdown("# 🔄 Comparative Analysis Hub")
+            st.markdown("### Discover insights through powerful period-over-period comparisons")
+            with st.expander("Configure Period Comparison"):
+                enable_comparison(selected_table, numeric_columns)
 
 def main():
     st.title("📊 Data Autobot")
