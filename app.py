@@ -1,4 +1,3 @@
-# Full app.py (Updated with Fixes)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -28,17 +27,31 @@ def get_table_columns(table_name, exclude=[]):
     schema = pd.read_sql_query(query, conn)
     return [col for col in schema["name"].tolist() if col not in exclude]
 
+# Process uploaded file
+def process_uploaded_file(uploaded_file):
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+            table_name = uploaded_file.name.split(".")[0]
+            process_and_store(df, table_name)
+        elif uploaded_file.name.endswith(".xlsx"):
+            sheets = pd.read_excel(uploaded_file, sheet_name=None)
+            for sheet_name, df in sheets.items():
+                process_and_store(df, sheet_name)
+        st.success("File successfully processed and saved to the database!")
+    except Exception as e:
+        logger.error(f"Error processing file: {e}")
+        st.error(f"Error processing file: {e}")
+
+def process_and_store(df, table_name):
+    df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
+    df.to_sql(table_name, conn, if_exists="replace", index=False)
+    logger.info(f"Table '{table_name}' created in the database.")
+
 # Visualization Function
 def generate_visualization(results, y_metric, optional_metric=None):
     try:
         if not results.empty:
-            results["% Change (Bar)"] = results[y_metric].pct_change().fillna(0).round(2) * 100
-            if optional_metric:
-                results["% Change (Line)"] = results[optional_metric].pct_change().fillna(0).round(2) * 100
-
-            st.write("Comparison Results with % Change:")
-            st.dataframe(results)
-
             fig = go.Figure()
             fig.add_bar(
                 x=results[results.columns[0]],
@@ -57,17 +70,16 @@ def generate_visualization(results, y_metric, optional_metric=None):
 
             fig.update_layout(
                 title=f"{y_metric} (Bar) and {optional_metric} (Line)" if optional_metric else f"Visualization of {y_metric}",
-                xaxis=dict(title="Period"),
+                xaxis=dict(title="Time Period"),
                 yaxis=dict(title=y_metric, side="left"),
                 yaxis2=dict(title=optional_metric, side="right", overlaying="y") if optional_metric else None,
-                legend=dict(orientation="h", y=-0.2),
                 margin=dict(l=40, r=40, t=40, b=40)
             )
-
             st.plotly_chart(fig)
         else:
             st.warning("No data available for visualization.")
     except Exception as e:
+        logger.error(f"Error generating visualization: {e}")
         st.error(f"Error generating visualization: {e}")
 
 # Extended Visualization UI
@@ -114,11 +126,10 @@ def generate_extended_visualization_ui(table_name):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.1")
+    st.write("**Version:** 2.6.2")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     if uploaded_file:
-        # Process uploaded file and generate UI
         process_uploaded_file(uploaded_file)
         tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
         tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
