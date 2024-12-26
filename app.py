@@ -1,4 +1,4 @@
-# App Version: 2.6.0
+# App Version: 2.6.1
 import streamlit as st
 import pandas as pd
 import sqlite3
