@@ -1,4 +1,4 @@
-# App Version: 2.6.0
+# App Version: 2.6.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -75,14 +75,17 @@ def process_uploaded_file(uploaded_file):
     try:
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file, encoding="utf-8", engine="python", on_bad_lines="skip")
+            df.to_sql(uploaded_file.name.split('.')[0], conn, if_exists="replace", index=False)
         else:
-            df = pd.read_excel(uploaded_file)
-
-        df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-            df.dropna(subset=["date"], inplace=True)
-        df.to_sql(uploaded_file.name.split('.')[0], conn, if_exists="replace", index=False)
+            excel_data = pd.ExcelFile(uploaded_file)
+            for sheet_name in excel_data.sheet_names:
+                df = excel_data.parse(sheet_name)
+                df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
+                if "date" in df.columns:
+                    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                    df.dropna(subset=["date"], inplace=True)
+                table_name = f"{uploaded_file.name.split('.')[0]}_{sheet_name}"
+                df.to_sql(table_name, conn, if_exists="replace", index=False)
         st.success("File successfully processed and saved to the database!")
     except Exception as e:
         st.error(f"Error processing file: {e}")
@@ -182,14 +185,15 @@ def generate_extended_visualization_ui(table_name):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.0")
+    st.write("**Version:** 2.6.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     if uploaded_file:
         process_uploaded_file(uploaded_file)
         generate_analysis_ui()
-        generate_comparison_ui(uploaded_file.name.split('.')[0])
-        generate_extended_visualization_ui(uploaded_file.name.split('.')[0])
+        for table in pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", conn)["name"]:
+            generate_comparison_ui(table)
+            generate_extended_visualization_ui(table)
 
 if __name__ == "__main__":
     main()
