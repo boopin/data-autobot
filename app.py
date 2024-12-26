@@ -105,10 +105,10 @@ def generate_analysis_ui():
             selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
         with col2:
             additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
-
+    
         if st.button("Run Analysis"):
             run_analysis(selected_table, selected_metric, additional_columns)
-
+    
         with st.expander("Generate Extended Time Period Visualization"):
     columns = [col for col in df.columns if col not in ["date", "week", "month", "quarter"]]
     bar_metric = st.selectbox(
@@ -122,14 +122,14 @@ def generate_analysis_ui():
         help="Choose a metric for the line chart."
     )
             period_type = st.selectbox("Select time period:", ["week", "month", "quarter"])
-
+    
             if st.button("Generate Extended Visualization"):
                 generate_extended_visualization(selected_table, bar_metric, line_metric, period_type)
-
+    
         with st.expander("Enable Comparison"):
             enable_comparison(selected_table)
-
-def run_analysis(table, metric, additional_columns):
+    
+    def run_analysis(table, metric, additional_columns):
     """Run analysis and generate results."""
     try:
         select_columns = [metric] + additional_columns
@@ -138,8 +138,8 @@ def run_analysis(table, metric, additional_columns):
         st.dataframe(results)
     except Exception as e:
         st.error(f"Error running analysis: {e}")
-
-def enable_comparison(table_name):
+    
+    def enable_comparison(table_name):
     """Enable comparison with custom names for periods."""
     col1, col2 = st.columns(2)
     with col1:
@@ -150,7 +150,7 @@ def enable_comparison(table_name):
         start_date_2 = st.date_input("Start Date for Period 2")
         end_date_2 = st.date_input("End Date for Period 2")
         period_2_name = st.text_input("Custom Name for Period 2", "Period 2")
-
+    
     columns = [col for col in df.columns if col not in ["date", "week", "month", "quarter"]]
     bar_metric = st.selectbox(
         "Select metric for bar chart:",
@@ -170,17 +170,17 @@ def enable_comparison(table_name):
         st.warning("Please select both bar and line metrics.")
         # Add combined chart generation logic
         pass
-
-
-def main():
+    
+    
+    def main():
     st.title("Data Autobot")
     st.write("Version 2.6.0")
-
+    
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     if uploaded_file:
         process_uploaded_file(uploaded_file)
         generate_analysis_ui()
-
-
-if __name__ == "__main__":
+    
+    
+    if __name__ == "__main__":
     main()
