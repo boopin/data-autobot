@@ -1,4 +1,4 @@
-# App Version: 2.7.1
+# App Version: 2.8.0
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -127,6 +127,34 @@ def process_and_store(df, table_name):
     df = df.drop_duplicates()
     df.to_sql(table_name, conn, if_exists="replace", index=False)
 
+def generate_extended_visualization_ui(table_name):
+    """Generate UI for extended visualization."""
+    with st.expander("Extended Visualization", expanded=False):
+        metric_bar = st.selectbox(
+            "Select metric for bar chart:",
+            get_table_columns(table_name, exclude=["date"]),
+            key="extended_metric_bar"
+        )
+        metric_line = st.selectbox(
+            "Select metric for line chart (optional):",
+            ["None"] + get_table_columns(table_name, exclude=["date"]),
+            key="extended_metric_line"
+        )
+        time_period = st.selectbox("Select time period:", ["week", "month", "quarter"], key="extended_time_period")
+
+        if st.button("Generate Extended Visualization", key="generate_extended_visualization"):
+            query = f"""
+            SELECT {time_period}, 
+                   SUM({quote_column_name(metric_bar)}) AS {metric_bar}
+                   {f", SUM({quote_column_name(metric_line)}) AS {metric_line}" if metric_line != "None" else ""}
+            FROM {quote_table_name(table_name)}
+            GROUP BY {time_period}
+            ORDER BY {time_period};
+            """
+            results = pd.read_sql_query(query, conn)
+            st.dataframe(results)
+            generate_visualization(results, metric_bar, optional_metric=(metric_line if metric_line != "None" else None))
+
 def generate_comparison_ui(table_name):
     """Generate UI for enabling and running comparisons."""
     with st.expander("Enable Comparison", expanded=False):
@@ -176,7 +204,7 @@ def generate_comparison_ui(table_name):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.7.1")
+    st.write("**Version:** 2.8.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
@@ -188,6 +216,7 @@ def main():
 
         if selected_table:
             generate_individual_metric_analysis(selected_table)
+            generate_extended_visualization_ui(selected_table)
             generate_comparison_ui(selected_table)
 
 if __name__ == "__main__":
