@@ -181,9 +181,17 @@ def generate_analysis_ui():
 
     selected_table = st.selectbox("Select table to analyze:", tables)
     if selected_table:
+        # Get the schema of the selected table
+        schema_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
+        schema = pd.read_sql_query(schema_query, conn)
+        columns = schema["name"].tolist()
+        
+        # Define numeric columns
+        numeric_columns = [col for col in columns if col not in ["date", "week", "month", "quarter"]]
+        
         st.markdown("## **Generate Extended Time Period Visualization**")
-        bar_metric = st.selectbox("Bar chart metric:", [])
-        line_metric = st.selectbox("Line chart metric:", [])
+        bar_metric = st.selectbox("Bar chart metric:", numeric_columns)
+        line_metric = st.selectbox("Line chart metric:", numeric_columns)
         period_type = st.selectbox("Select time period:", ["week", "month", "quarter"])
 
         if st.button("Generate Extended Visualization"):
