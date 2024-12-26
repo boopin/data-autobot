@@ -110,8 +110,17 @@ def generate_analysis_ui():
             run_analysis(selected_table, selected_metric, additional_columns)
 
         with st.expander("Generate Extended Time Period Visualization"):
-            bar_metric = st.selectbox("Select metric for bar chart:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
-            line_metric = st.selectbox("Select metric for line chart:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+    columns = [col for col in df.columns if col not in ["date", "week", "month", "quarter"]]
+    bar_metric = st.selectbox(
+        "Select metric for bar chart:",
+        options=columns,
+        help="Choose a metric for the bar chart."
+    )
+    line_metric = st.selectbox(
+        "Select metric for line chart:",
+        options=columns,
+        help="Choose a metric for the line chart."
+    )
             period_type = st.selectbox("Select time period:", ["week", "month", "quarter"])
 
             if st.button("Generate Extended Visualization"):
@@ -142,10 +151,23 @@ def enable_comparison(table_name):
         end_date_2 = st.date_input("End Date for Period 2")
         period_2_name = st.text_input("Custom Name for Period 2", "Period 2")
 
-    bar_metric = st.selectbox("Select metric for bar chart:", [])
-    line_metric = st.selectbox("Select metric for line chart:", [])
+    columns = [col for col in df.columns if col not in ["date", "week", "month", "quarter"]]
+    bar_metric = st.selectbox(
+        "Select metric for bar chart:",
+        options=columns,
+        help="Choose a metric for the bar chart."
+    )
+    line_metric = st.selectbox(
+        "Select metric for line chart:",
+        options=columns,
+        help="Choose a metric for the line chart."
+    )
     
-    if st.button("Generate Combined Visualization"):
+    if bar_metric and line_metric:
+        if st.button("Generate Combined Visualization"):
+            generate_combined_visualization(df, bar_metric, line_metric, "time_period", "Comparison of Metrics")
+    else:
+        st.warning("Please select both bar and line metrics.")
         # Add combined chart generation logic
         pass
 
