@@ -1,4 +1,4 @@
-# App Version: 2.5.1
+# App Version: 2.5.2
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -172,7 +172,8 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.5.1")
+    st.write("**Tagline:** Unlock insights at the speed of thought!")
+    st.write("**Version:** 2.5.2")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
