@@ -1,4 +1,4 @@
-# App Version: 2.5.0
+# App Version: 2.5.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -10,6 +10,10 @@ conn = sqlite3.connect(":memory:")
 def quote_table_name(table_name):
     """Properly quote table names for SQLite."""
     return f'"{table_name}"'
+
+def quote_column_name(column_name):
+    """Properly quote column names for SQLite."""
+    return f'"{column_name}"'
 
 def generate_visualization(results, metric):
     """Generate visualization for results."""
@@ -44,28 +48,19 @@ def process_uploaded_file(uploaded_file):
 
 def process_and_store(df, table_name):
     """Process the DataFrame and store it in the SQLite database with aggregations."""
-    # Sanitize column headers
     df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
 
-    # Remove invalid rows and duplicates
-    df = df.dropna(how="all").drop_duplicates()
-
-    # Check for date column
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notnull()]  # Remove invalid dates
-
-        # Add derived time periods
+        df = df[df["date"].notnull()]
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-
-        # Save aggregated views
         save_aggregated_view(df, table_name, "week", "weekly")
         save_aggregated_view(df, table_name, "month", "monthly")
         save_aggregated_view(df, table_name, "quarter", "quarterly")
 
-    # Save cleaned data to the database
+    df = df.drop_duplicates()
     df.to_sql(table_name, conn, if_exists="replace", index=False)
     st.write(f"Table '{table_name}' created in the database with raw and aggregated views.")
 
@@ -129,12 +124,13 @@ def generate_comparison_ui(table_name):
             end_date_2 = st.date_input("End Date for Period 2")
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
+            metric = st.selectbox("Select metric for comparison:", [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"])
             comparison_query = f"""
-            SELECT 'Period 1' AS period, SUM(primary) AS total
+            SELECT 'Period 1' AS period, SUM({quote_column_name(metric)}) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
             UNION ALL
-            SELECT 'Period 2' AS period, SUM(primary) AS total
+            SELECT 'Period 2' AS period, SUM({quote_column_name(metric)}) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
@@ -158,9 +154,9 @@ def execute_comparison_query(query):
 def run_analysis(table, metric, additional_columns, sort_order, row_limit):
     """Run the analysis and generate output."""
     try:
-        select_columns = [metric] + additional_columns
+        select_columns = [quote_column_name(metric)] + [quote_column_name(col) for col in additional_columns]
         sort_clause = "DESC" if sort_order == "Highest" else "ASC"
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
+        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {quote_column_name(metric)} {sort_clause} LIMIT {row_limit}"
 
         st.write("Generated Query:")
         st.code(query)
@@ -176,7 +172,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.5.0")
+    st.write("Version: 2.5.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
