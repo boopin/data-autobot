@@ -1,9 +1,8 @@
-# App Version: 2.5.0
+# App Version: 2.5.1
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.graph_objects as go
-import chardet
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -40,7 +39,7 @@ def generate_visualization(results, metric, additional_metric=None):
             )
 
         fig.update_layout(
-            title="Visualization",
+            title=f"Comparison of {metric} and {additional_metric}" if additional_metric else f"Visualization of {metric}",
             xaxis_title=results.columns[0],
             yaxis_title="Values",
             legend_title="Metrics",
@@ -52,31 +51,19 @@ def generate_visualization(results, metric, additional_metric=None):
 
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
-    try:
-        # Detect encoding
-        raw_data = uploaded_file.read()
-        detected_encoding = chardet.detect(raw_data)
-        encoding = detected_encoding["encoding"]
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file, sheet_name=None)
 
-        # Rewind the file pointer
-        uploaded_file.seek(0)
+    if isinstance(df, dict):
+        st.write("Detected multiple sheets in the uploaded file.")
+        for sheet_name, sheet_df in df.items():
+            process_and_store(sheet_df, sheet_name)
+    else:
+        process_and_store(df, uploaded_file.name.split('.')[0])
 
-        # Load the file based on detected encoding
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file, encoding=encoding)
-        else:
-            df = pd.read_excel(uploaded_file, sheet_name=None)
-
-        if isinstance(df, dict):
-            st.write("Detected multiple sheets in the uploaded file.")
-            for sheet_name, sheet_df in df.items():
-                process_and_store(sheet_df, sheet_name)
-        else:
-            process_and_store(df, uploaded_file.name.split('.')[0])
-
-        st.success("File successfully processed and saved to the database!")
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
+    st.success("File successfully processed and saved to the database!")
 
 def process_and_store(df, table_name):
     """Process the DataFrame and store it in the SQLite database with aggregations."""
@@ -124,10 +111,10 @@ def generate_analysis_ui():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select primary metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+            selected_metric = st.selectbox("Select primary metric to analyze:", [col for col in columns if col != "date"])
 
         with col2:
-            additional_metric = st.selectbox("Select secondary metric (optional):", ["None"] + [col for col in columns if col not in ["date", "week", "month", "quarter", selected_metric]])
+            additional_metric = st.selectbox("Select secondary metric for visualization (optional):", ["None"] + [col for col in columns if col != "date"])
 
         with col3:
             sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
@@ -156,15 +143,15 @@ def generate_comparison_ui(table_name):
             end_date_2 = st.date_input("End Date for Period 2")
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
-            period_names = st.text_input("Enter names for periods (comma-separated, e.g., 'Period 1, Period 2')", value="Period 1, Period 2").split(",")
+            period_names = st.text_input("Enter names for periods (comma-separated, e.g., 'Q1 2024, Q2 2024')", value="Period 1, Period 2").split(",")
             period_1, period_2 = period_names if len(period_names) == 2 else ["Period 1", "Period 2"]
 
             custom_query = f"""
-            SELECT '{period_1}' AS period, SUM(primary) AS total
+            SELECT '{period_1.strip()}' AS period, SUM({quote_table_name('primary')}) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
             UNION ALL
-            SELECT '{period_2}' AS period, SUM(primary) AS total
+            SELECT '{period_2.strip()}' AS period, SUM({quote_table_name('primary')}) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
@@ -177,7 +164,7 @@ def execute_comparison_query(query, period_1, period_2):
         comparison_results["% Change"] = (
             comparison_results["total"].pct_change().fillna(0) * 100
         ).round(2)
-        st.write(f"Comparison Results ({period_1} vs {period_2}):")
+        st.write(f"Comparison Results ({period_1.strip()} vs {period_2.strip()}):")
         st.dataframe(comparison_results)
 
         if st.checkbox("Generate Visualization for Comparison"):
@@ -210,7 +197,7 @@ def run_analysis(table, metric, additional_metric, sort_order, row_limit):
 def main():
     st.title("Data Autobot")
     st.write("Your smart assistant for data analysis and visualization.")
-    st.write("Version: 2.5.0")
+    st.write("Version: 2.5.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
