@@ -1,8 +1,8 @@
-# App Version: 2.6.0
+# App Version: 2.6.1
 import streamlit as st
 import pandas as pd
 import sqlite3
-import plotly.express as px
+import plotly.graph_objects as go
 import logging
 
 # Configure logging
@@ -24,25 +24,40 @@ def quote_column_name(column_name):
     """Properly quote column names for SQLite."""
     return f'"{column_name}"'
 
-def generate_visualization(results, metric, title):
-    """Generate visualization for a single metric."""
+def generate_combined_visualization(results, bar_metric, line_metric, title):
+    """Generate combined bar and line visualization."""
     try:
         if not results.empty:
-            logger.info("Generating visualization...")
-            fig = px.bar(
-                results,
-                x=results.columns[0],
-                y=metric,
+            logger.info("Generating combined visualization...")
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    x=results.iloc[:, 0],
+                    y=results[bar_metric],
+                    name=f"{bar_metric} (Bar)",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=results.iloc[:, 0],
+                    y=results[line_metric],
+                    name=f"{line_metric} (Line)",
+                    mode="lines+markers",
+                )
+            )
+            fig.update_layout(
                 title=title,
-                labels={metric: "Values", results.columns[0]: "Category"},
+                xaxis_title=results.columns[0],
+                yaxis_title="Values",
+                legend_title="Metrics",
             )
             st.plotly_chart(fig)
         else:
             st.warning("No data available to generate visualization.")
-            logger.warning("No data available for visualization.")
+            logger.warning("No data available for combined visualization.")
     except Exception as e:
-        logger.error(f"Error generating visualization: {e}")
-        st.error(f"Error generating visualization: {e}")
+        logger.error(f"Error generating combined visualization: {e}")
+        st.error(f"Error generating combined visualization: {e}")
 
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
@@ -104,18 +119,20 @@ def save_aggregated_view(df, table_name, period_col, suffix):
         logger.error(f"Could not create aggregated table for '{suffix}': {e}")
         st.warning(f"Could not create aggregated table for '{suffix}': {e}")
 
-def execute_comparison_query(query):
+def execute_comparison_query(query, bar_metric, line_metric):
     """Execute the comparison query and display results."""
     try:
         comparison_results = pd.read_sql_query(query, conn)
         comparison_results["% Change"] = (
-            comparison_results["total"].pct_change().fillna(0) * 100
+            comparison_results[bar_metric].pct_change().fillna(0) * 100
         ).round(2)
         st.write("Comparison Results:")
         st.dataframe(comparison_results)
 
-        if st.checkbox("Generate Visualization for Comparison"):
-            generate_visualization(comparison_results, "total", "Comparison Results")
+        if st.checkbox("Generate Combined Visualization for Comparison"):
+            generate_combined_visualization(
+                comparison_results, bar_metric, line_metric, "Comparison Results"
+            )
     except Exception as e:
         logger.error(f"Error executing comparison query: {e}")
         st.error(f"Error executing comparison query: {e}")
@@ -135,17 +152,24 @@ def generate_comparison_ui(table_name):
             end_date_2 = st.date_input("End Date for Period 2")
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
-            metric = st.selectbox("Select metric for comparison:", [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"])
+            bar_metric = st.selectbox(
+                "Select bar metric for comparison:",
+                [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"],
+            )
+            line_metric = st.selectbox(
+                "Select line metric for comparison:",
+                [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"],
+            )
             comparison_query = f"""
-            SELECT 'Period 1' AS period, SUM({quote_column_name(metric)}) AS total
+            SELECT 'Period 1' AS period, SUM({quote_column_name(bar_metric)}) AS {bar_metric}, SUM({quote_column_name(line_metric)}) AS {line_metric}
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
             UNION ALL
-            SELECT 'Period 2' AS period, SUM({quote_column_name(metric)}) AS total
+            SELECT 'Period 2' AS period, SUM({quote_column_name(bar_metric)}) AS {bar_metric}, SUM({quote_column_name(line_metric)}) AS {line_metric}
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
-            execute_comparison_query(comparison_query)
+            execute_comparison_query(comparison_query, bar_metric, line_metric)
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
@@ -200,7 +224,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
         st.dataframe(results)
 
         if st.checkbox("Generate Visualization"):
-            generate_visualization(results, metric, f"Visualization of {metric}")
+            generate_combined_visualization(results, metric, metric, f"Visualization of {metric}")
     except Exception as e:
         logger.error(f"Error executing query: {e}")
         st.error(f"Error executing query: {e}")
@@ -208,7 +232,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.0")
+    st.write("**Version:** 2.6.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
