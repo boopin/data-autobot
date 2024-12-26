@@ -1,4 +1,4 @@
-# App Version: 2.5.6
+# App Version: 2.5.7
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -110,6 +110,49 @@ def save_aggregated_view(df, table_name, period_col, suffix):
         logger.error(f"Could not create aggregated table for '{suffix}': {e}")
         st.warning(f"Could not create aggregated table for '{suffix}': {e}")
 
+def generate_comparison_ui(table_name):
+    """Generate UI for enabling and running comparisons."""
+    st.subheader("Enable Comparison")
+    enable_comparison = st.checkbox("Toggle Comparison")
+
+    if enable_comparison:
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date_1 = st.date_input("Start Date for Period 1")
+            end_date_1 = st.date_input("End Date for Period 1")
+        with col2:
+            start_date_2 = st.date_input("Start Date for Period 2")
+            end_date_2 = st.date_input("End Date for Period 2")
+
+        if start_date_1 and end_date_1 and start_date_2 and end_date_2:
+            metric = st.selectbox("Select metric for comparison:", [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"])
+            comparison_query = f"""
+            SELECT 'Period 1' AS period, SUM({quote_column_name(metric)}) AS total
+            FROM {quote_table_name(table_name)}
+            WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
+            UNION ALL
+            SELECT 'Period 2' AS period, SUM({quote_column_name(metric)}) AS total
+            FROM {quote_table_name(table_name)}
+            WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
+            """
+            execute_comparison_query(comparison_query)
+
+def execute_comparison_query(query):
+    """Execute the comparison query and display results."""
+    try:
+        comparison_results = pd.read_sql_query(query, conn)
+        comparison_results["% Change"] = (
+            comparison_results["total"].pct_change().fillna(0) * 100
+        ).round(2)
+        st.write("Comparison Results:")
+        st.dataframe(comparison_results)
+
+        if st.checkbox("Generate Visualization for Comparison"):
+            generate_visualization(comparison_results, "total")
+    except Exception as e:
+        logger.error(f"Error executing comparison query: {e}")
+        st.error(f"Error executing comparison query: {e}")
+
 def generate_analysis_ui():
     """Generate UI for data analysis."""
     try:
@@ -171,7 +214,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.5.6")
+    st.write("**Version:** 2.5.7")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
