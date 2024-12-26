@@ -27,7 +27,7 @@ def get_table_columns(table_name, exclude=[]):
     schema = pd.read_sql_query(query, conn)
     return [col for col in schema["name"].tolist() if col not in exclude]
 
-# File processing
+# Process uploaded file
 def process_uploaded_file(uploaded_file):
     try:
         if uploaded_file.name.endswith(".csv"):
@@ -54,107 +54,6 @@ def process_and_store(df, table_name):
     df.to_sql(table_name, conn, if_exists="replace", index=False)
     logger.info(f"Table '{table_name}' created in the database.")
 
-# Individual Metrics Analysis
-def generate_analysis_ui():
-    st.subheader("Analyze Individual Metrics")
-    tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
-    tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
-
-    selected_table = st.selectbox("Select table to analyze:", tables)
-    if selected_table:
-        columns = get_table_columns(selected_table)
-        metric = st.selectbox("Select metric to analyze:", columns)
-        additional_columns = st.multiselect("Additional columns to display:", columns, default=columns)
-        sort_order = st.radio("Sort order:", ["Highest", "Lowest"])
-        limit = st.slider("Number of rows to display:", 5, 50, 10)
-
-        if st.button("Run Analysis"):
-            query = f"""
-            SELECT {', '.join(quote_column_name(col) for col in additional_columns)}
-            FROM {quote_table_name(selected_table)}
-            ORDER BY {quote_column_name(metric)} {'DESC' if sort_order == 'Highest' else 'ASC'}
-            LIMIT {limit};
-            """
-            try:
-                results = pd.read_sql_query(query, conn)
-                st.dataframe(results)
-            except Exception as e:
-                st.error(f"Error running analysis: {e}")
-
-# Comparison Functionality
-def generate_comparison_ui(table_name):
-    st.subheader("Enable Comparison")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        start_date_1 = st.date_input("Start Date for Period 1")
-        end_date_1 = st.date_input("End Date for Period 1")
-        custom_name_1 = st.text_input("Custom Name for Period 1", value="Period 1")
-
-    with col2:
-        start_date_2 = st.date_input("Start Date for Period 2")
-        end_date_2 = st.date_input("End Date for Period 2")
-        custom_name_2 = st.text_input("Custom Name for Period 2", value="Period 2")
-
-    metric_bar = st.selectbox("Select metric for bar chart:", get_table_columns(table_name, exclude=["date"]))
-    metric_line = st.selectbox("Select metric for line chart (optional):", ["None"] + get_table_columns(table_name, exclude=["date"]))
-
-    if st.button("Generate Combined Visualization"):
-        try:
-            query = f"""
-            SELECT '{custom_name_1}' AS period, SUM({quote_column_name(metric_bar)}) AS {metric_bar}, 
-                   SUM({quote_column_name(metric_line)}) AS {metric_line}
-            FROM {quote_table_name(table_name)}
-            WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
-            UNION ALL
-            SELECT '{custom_name_2}' AS period, SUM({quote_column_name(metric_bar)}) AS {metric_bar}, 
-                   SUM({quote_column_name(metric_line)}) AS {metric_line}
-            FROM {quote_table_name(table_name)}
-            WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
-            """
-            results = pd.read_sql_query(query, conn)
-            generate_visualization(
-                results,
-                metric_bar,
-                optional_metric=(metric_line if metric_line != "None" else None)
-            )
-        except Exception as e:
-            st.error(f"Error generating combined visualization: {e}")
-
-# Extended Visualization
-def generate_extended_visualization_ui(table_name):
-    st.subheader("Extended Visualization")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        metric_bar = st.selectbox(
-            "Select metric for bar chart:", get_table_columns(table_name, exclude=["date"])
-        )
-
-    with col2:
-        metric_line = st.selectbox(
-            "Select metric for line chart (optional):", ["None"] + get_table_columns(table_name, exclude=["date"])
-        )
-
-    time_period = st.selectbox("Select time period:", ["week", "month", "quarter"])
-
-    if st.button("Generate Extended Visualization"):
-        try:
-            query = f"""
-            SELECT {time_period}, SUM({quote_column_name(metric_bar)}) AS {metric_bar}, 
-                   SUM({quote_column_name(metric_line)}) AS {metric_line}
-            FROM {quote_table_name(table_name)}
-            GROUP BY {time_period};
-            """
-            results = pd.read_sql_query(query, conn)
-            generate_visualization(
-                results,
-                metric_bar,
-                optional_metric=(metric_line if metric_line != "None" else None)
-            )
-        except Exception as e:
-            st.error(f"Error generating extended visualization: {e}")
-
 # Visualization Function
 def generate_visualization(results, y_metric, optional_metric=None):
     try:
@@ -174,7 +73,6 @@ def generate_visualization(results, y_metric, optional_metric=None):
                     mode="lines+markers",
                     yaxis="y2"
                 )
-
             fig.update_layout(
                 title=f"{y_metric} (Bar) and {optional_metric} (Line)" if optional_metric else f"Visualization of {y_metric}",
                 xaxis=dict(title="Time Period"),
@@ -189,11 +87,85 @@ def generate_visualization(results, y_metric, optional_metric=None):
         logger.error(f"Error generating visualization: {e}")
         st.error(f"Error generating visualization: {e}")
 
+# Extended Visualization
+def generate_extended_visualization_ui(table_name):
+    st.subheader(f"Extended Visualization for Table: {table_name}")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        metric_bar = st.selectbox(
+            "Select metric for bar chart:",
+            get_table_columns(table_name, exclude=["date"]),
+            key=f"{table_name}_bar_metric"
+        )
+
+    with col2:
+        metric_line = st.selectbox(
+            "Select metric for line chart (optional):",
+            ["None"] + get_table_columns(table_name, exclude=["date"]),
+            key=f"{table_name}_line_metric"
+        )
+
+    time_period = st.selectbox(
+        "Select time period:",
+        ["week", "month", "quarter"],
+        key=f"{table_name}_time_period"
+    )
+
+    if st.button("Generate Extended Visualization", key=f"{table_name}_extended_visualization"):
+        try:
+            query = f"""
+            SELECT {time_period}, SUM({quote_column_name(metric_bar)}) AS {metric_bar}, 
+                   SUM({quote_column_name(metric_line)}) AS {metric_line}
+            FROM {quote_table_name(table_name)}
+            GROUP BY {time_period};
+            """
+            results = pd.read_sql_query(query, conn)
+            generate_visualization(
+                results,
+                metric_bar,
+                optional_metric=(metric_line if metric_line != "None" else None)
+            )
+        except Exception as e:
+            st.error(f"Error generating extended visualization: {e}")
+
+# Individual Metrics Analysis
+def generate_analysis_ui():
+    st.subheader("Analyze Individual Metrics")
+    tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
+    tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
+
+    selected_table = st.selectbox("Select table to analyze:", tables)
+    if selected_table:
+        columns = get_table_columns(selected_table)
+        metric = st.selectbox("Select metric to analyze:", columns, key=f"{selected_table}_metric")
+        additional_columns = st.multiselect(
+            "Additional columns to display:",
+            options=columns,
+            default=columns,
+            key=f"{selected_table}_additional_columns"
+        )
+        sort_order = st.radio("Sort order:", ["Highest", "Lowest"], key=f"{selected_table}_sort_order")
+        limit = st.slider("Number of rows to display:", 5, 50, 10, key=f"{selected_table}_limit")
+
+        if st.button("Run Analysis", key=f"{selected_table}_run_analysis"):
+            query = f"""
+            SELECT {', '.join(quote_column_name(col) for col in additional_columns)}
+            FROM {quote_table_name(selected_table)}
+            ORDER BY {quote_column_name(metric)} {'DESC' if sort_order == 'Highest' else 'ASC'}
+            LIMIT {limit};
+            """
+            try:
+                results = pd.read_sql_query(query, conn)
+                st.dataframe(results)
+            except Exception as e:
+                st.error(f"Error running analysis: {e}")
+
 # Main App
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.3")
+    st.write("**Version:** 2.6.4")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     if uploaded_file:
@@ -202,7 +174,6 @@ def main():
         tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
         for table in tables:
             generate_analysis_ui()
-            generate_comparison_ui(table)
             generate_extended_visualization_ui(table)
 
 if __name__ == "__main__":
