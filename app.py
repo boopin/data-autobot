@@ -10,7 +10,7 @@ conn = sqlite3.connect(":memory:")
 # App Metadata
 APP_NAME = "Data Autobot"
 TAGLINE = "Unlock insights at the speed of thought!"
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 
 
 def quote_table_name(table_name):
