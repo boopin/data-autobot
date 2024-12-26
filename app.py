@@ -1,10 +1,17 @@
-# App Version: 2.6.1
+# App Version: 2.6.2
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+
+# Configure page settings
+st.set_page_config(
+    page_title="DataAutobot Pro",
+    page_icon="📊",
+    layout="wide"
+)
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -54,8 +61,8 @@ def generate_extended_visualization(table, bar_metric, line_metric, period_type)
     try:
         query = f"""
             SELECT {period_type}, 
-                   SUM({bar_metric}) AS {bar_metric}, 
-                   SUM({line_metric}) AS {line_metric} 
+                   SUM({quote_column_name(bar_metric)}) AS {quote_column_name(bar_metric)}, 
+                   SUM({quote_column_name(line_metric)}) AS {quote_column_name(line_metric)} 
             FROM {quote_table_name(table)} 
             GROUP BY {period_type} 
             ORDER BY {period_type}
@@ -126,44 +133,54 @@ def generate_analysis_ui():
     tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
     tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
 
-    selected_table = st.selectbox("Select table to analyze:", tables)
+    selected_table = st.selectbox("Select table to analyze:", tables, key="table_select")
 
     if selected_table:
         columns_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
         schema = pd.read_sql_query(columns_query, conn)
         columns = schema["name"].tolist()
+        
+        numeric_columns = [col for col in columns if col not in ["date", "week", "month", "quarter"]]
 
         col1, col2 = st.columns(2)
         with col1:
             selected_metric = st.selectbox(
-                "Select metric to analyze:", 
-                [col for col in columns if col not in ["date", "week", "month", "quarter"]]
+                "Primary metric for analysis:", 
+                numeric_columns,
+                key="primary_metric"
             )
         with col2:
             additional_columns = st.multiselect(
-                "Select additional columns:", 
-                [col for col in columns if col != selected_metric]
+                "Additional columns for analysis:", 
+                [col for col in columns if col != selected_metric],
+                key="additional_cols"
             )
 
-        if st.button("Run Analysis"):
+        if st.button("Run Analysis", key="run_analysis"):
             run_analysis(selected_table, selected_metric, additional_columns)
 
         with st.expander("Generate Extended Time Period Visualization"):
             bar_metric = st.selectbox(
-                "Select metric for bar chart:", 
-                [col for col in columns if col not in ["date", "week", "month", "quarter"]]
+                "Bar chart metric:", 
+                numeric_columns,
+                key="extended_bar_metric"
             )
             line_metric = st.selectbox(
-                "Select metric for line chart:", 
-                [col for col in columns if col not in ["date", "week", "month", "quarter"]]
+                "Line chart metric:", 
+                numeric_columns,
+                key="extended_line_metric"
             )
-            period_type = st.selectbox("Select time period:", ["week", "month", "quarter"])
+            period_type = st.selectbox(
+                "Time period:", 
+                ["week", "month", "quarter"],
+                key="extended_period_type"
+            )
 
-            if st.button("Generate Extended Visualization"):
+            if st.button("Generate Extended Visualization", key="generate_extended"):
                 generate_extended_visualization(selected_table, bar_metric, line_metric, period_type)
 
         with st.expander("Enable Comparison"):
-            enable_comparison(selected_table)
+            enable_comparison(selected_table, numeric_columns)
 
 def run_analysis(table, metric, additional_columns):
     """Run analysis and generate results."""
@@ -180,28 +197,30 @@ def run_analysis(table, metric, additional_columns):
     except Exception as e:
         st.error(f"Error running analysis: {e}")
 
-def enable_comparison(table_name):
+def enable_comparison(table_name, numeric_columns):
     """Enable comparison with custom names for periods."""
-    # Get columns from the table
-    columns_query = f"PRAGMA table_info({quote_table_name(table_name)});"
-    schema = pd.read_sql_query(columns_query, conn)
-    numeric_columns = [col for col in schema["name"].tolist() 
-                      if col not in ["date", "week", "month", "quarter"]]
-    
     col1, col2 = st.columns(2)
     with col1:
-        start_date_1 = st.date_input("Start Date for Period 1")
-        end_date_1 = st.date_input("End Date for Period 1")
-        period_1_name = st.text_input("Custom Name for Period 1", "Period 1")
+        start_date_1 = st.date_input("Start Date for Period 1", key="start_date_1")
+        end_date_1 = st.date_input("End Date for Period 1", key="end_date_1")
+        period_1_name = st.text_input("Custom Name for Period 1", "Period 1", key="period_1_name")
     with col2:
-        start_date_2 = st.date_input("Start Date for Period 2")
-        end_date_2 = st.date_input("End Date for Period 2")
-        period_2_name = st.text_input("Custom Name for Period 2", "Period 2")
+        start_date_2 = st.date_input("Start Date for Period 2", key="start_date_2")
+        end_date_2 = st.date_input("End Date for Period 2", key="end_date_2")
+        period_2_name = st.text_input("Custom Name for Period 2", "Period 2", key="period_2_name")
 
-    bar_metric = st.selectbox("Select metric for bar chart:", numeric_columns)
-    line_metric = st.selectbox("Select metric for line chart:", numeric_columns)
+    bar_metric = st.selectbox(
+        "Comparison bar chart metric:", 
+        numeric_columns,
+        key="comparison_bar_metric"
+    )
+    line_metric = st.selectbox(
+        "Comparison line chart metric:", 
+        numeric_columns,
+        key="comparison_line_metric"
+    )
     
-    if st.button("Generate Combined Visualization"):
+    if st.button("Generate Combined Visualization", key="generate_comparison"):
         try:
             # Create queries for both periods
             query1 = f"""
@@ -263,8 +282,21 @@ def enable_comparison(table_name):
             st.error(f"Error generating comparison visualization: {e}")
 
 def main():
-    st.title("Data Autobot")
-    st.write("Version 2.6.1")
+    # App title and branding
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.title("📊 DataAutobot Pro")
+        st.markdown("*Transform Your Data into Actionable Insights*")
+    with col2:
+        st.markdown("""
+        <div style='text-align: right; padding: 1em;'>
+            <p style='color: #666; font-size: 0.8em;'>Version 2.6.2</p>
+            <p style='color: #666; font-size: 0.8em;'>Enterprise Edition</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Add a subtle divider
+    st.markdown("<hr style='margin: 1em 0; opacity: 0.3;'>", unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     if uploaded_file:
