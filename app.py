@@ -1,4 +1,4 @@
-# App Version: 2.5.2
+# App Version: 2.5.3
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -18,7 +18,13 @@ def quote_column_name(column_name):
 def generate_visualization(results, metric):
     """Generate visualization for results."""
     if not results.empty:
-        fig = px.bar(results, x=results.columns[0], y=metric, title=f"Visualization of {metric}")
+        fig = px.bar(
+            results,
+            x=results.columns[0],
+            y=metric,
+            title=f"Visualization of {metric}",
+            labels={metric: "Values", results.columns[0]: "Category"}
+        )
         st.plotly_chart(fig)
     else:
         st.warning("No data available to generate visualization.")
@@ -26,13 +32,11 @@ def generate_visualization(results, metric):
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
     try:
-        # Detect encoding and read file
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file, encoding="utf-8", engine="python", on_bad_lines="skip")
         else:
             df = pd.read_excel(uploaded_file, sheet_name=None)
         
-        # Process multiple sheets or single DataFrame
         if isinstance(df, dict):
             st.write("Detected multiple sheets in the uploaded file.")
             for sheet_name, sheet_df in df.items():
@@ -173,7 +177,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.5.2")
+    st.write("**Version:** 2.5.3")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
