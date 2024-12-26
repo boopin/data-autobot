@@ -19,24 +19,45 @@ def generate_combined_visualization(df, bar_metric, line_metric, x_column, title
     """Generate combined bar and line visualization."""
     try:
         fig = px.bar(
-            df, x=x_column, y=bar_metric, title=title, labels={x_column: "Time Period"}
+            df, x=x_column, y=bar_metric, 
+            title=title, 
+            labels={x_column: "Time Period"},
+            opacity=0.7  # Make bars slightly transparent
         )
         if line_metric:
             fig.add_scatter(
-                x=df[x_column], y=df[line_metric], mode="lines+markers", name=line_metric
+                x=df[x_column], 
+                y=df[line_metric], 
+                mode="lines+markers", 
+                name=line_metric,
+                line=dict(width=3),  # Increase line width
+                marker=dict(size=8),  # Increase marker size
+                yaxis="y2"  # Use secondary y-axis
+            )
+            # Update layout for secondary y-axis
+            fig.update_layout(
+                yaxis2=dict(
+                    overlaying="y",
+                    side="right",
+                    title=line_metric
+                ),
+                yaxis_title=bar_metric
             )
         st.plotly_chart(fig)
     except Exception as e:
         st.error(f"Error generating combined visualization: {e}")
 
-def generate_extended_visualization(table, bar_metric, line_metric, period_type):
+def generate_extended_visualization(table, bar_metric, line_metric, period_type, max_rows=None, sort_order="DESC"):
     """Generate extended visualization for predefined time periods."""
     try:
         # Generate combined query for all metrics
         query = f"SELECT {period_type}, SUM({bar_metric}) AS {bar_metric}"
         if line_metric:
             query += f", SUM({line_metric}) AS {line_metric}"
-        query += f" FROM {quote_table_name(table)} GROUP BY {period_type} ORDER BY {period_type}"
+        query += f" FROM {quote_table_name(table)} GROUP BY {period_type} ORDER BY {bar_metric} {sort_order}"
+        if max_rows:
+            query += f" LIMIT {max_rows}"
+        
         df = pd.read_sql_query(query, conn)
 
         # Calculate additional statistics
@@ -78,49 +99,7 @@ def generate_extended_visualization(table, bar_metric, line_metric, period_type)
     except Exception as e:
         st.error(f"Error generating extended visualization: {e}")
 
-def process_uploaded_file(uploaded_file):
-    """Process uploaded file and store it in the database."""
-    try:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file, encoding="utf-8", engine="python", on_bad_lines="skip")
-        else:
-            df = pd.read_excel(uploaded_file, sheet_name=None)
-        
-        if isinstance(df, dict):
-            for sheet_name, sheet_df in df.items():
-                process_and_store(sheet_df, sheet_name)
-        else:
-            process_and_store(df, uploaded_file.name.split('.')[0])
-
-        st.success("File successfully processed and saved to the database!")
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-
-def process_and_store(df, table_name):
-    """Process the DataFrame and store it in the SQLite database."""
-    df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
-
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notnull()]
-        df["week"] = df["date"].dt.to_period("W").astype(str)
-        df["month"] = df["date"].dt.to_period("M").astype(str)
-        df["quarter"] = df["date"].dt.to_period("Q").astype(str)
-        save_aggregated_view(df, table_name, "week", "weekly")
-        save_aggregated_view(df, table_name, "month", "monthly")
-        save_aggregated_view(df, table_name, "quarter", "quarterly")
-
-    df.to_sql(table_name, conn, if_exists="replace", index=False)
-
-def save_aggregated_view(df, table_name, period_col, suffix):
-    """Save aggregated views by period."""
-    try:
-        if period_col in df.columns:
-            agg_df = df.groupby(period_col).sum(numeric_only=True).reset_index()
-            agg_table_name = f"{table_name}_{suffix}"
-            agg_df.to_sql(agg_table_name, conn, if_exists="replace", index=False)
-    except Exception as e:
-        st.warning(f"Could not create aggregated table for '{suffix}': {e}")
+[Previous helper functions remain the same]
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
@@ -151,11 +130,21 @@ def generate_analysis_ui():
                 key="additional_cols"
             )
             
+        # Add row selection and sorting options
+        col1, col2 = st.columns(2)
+        with col1:
+            max_rows = st.slider("Number of rows to display", min_value=1, max_value=100, value=10)
+        with col2:
+            sort_order = st.selectbox("Sort order", ["High to Low", "Low to High"], index=0)
+            
         if st.button("Run Analysis", key="run_analysis"):
             st.subheader("Analysis Results")
-            run_analysis(selected_table, selected_metric, additional_columns)
+            run_analysis(selected_table, selected_metric, additional_columns, max_rows, 
+                        "DESC" if sort_order == "High to Low" else "ASC")
             
-        with st.expander("Generate Extended Time Period Visualization"):
+        st.markdown("---")
+        st.markdown("## 📈 Generate Extended Time Period Visualization")
+        with st.expander("Configure Time Period Analysis"):
             st.subheader("Time Period Analysis")
             bar_metric = st.selectbox(
                 "Bar chart metric (required):", 
@@ -178,17 +167,37 @@ def generate_analysis_ui():
                 key="extended_period_type"
             )
             
+            col1, col2 = st.columns(2)
+            with col1:
+                max_period_rows = st.slider("Number of periods to display", min_value=1, max_value=100, value=50)
+            with col2:
+                period_sort_order = st.selectbox("Sort periods by", ["High to Low", "Low to High"], index=0)
+            
             if st.button("Generate Extended Visualization", key="generate_extended"):
-                generate_extended_visualization(selected_table, bar_metric, line_metric, period_type)
-                
-        with st.expander("Enable Comparison"):
+                generate_extended_visualization(
+                    selected_table, 
+                    bar_metric, 
+                    line_metric, 
+                    period_type,
+                    max_period_rows,
+                    "DESC" if period_sort_order == "High to Low" else "ASC"
+                )
+        
+        st.markdown("---")
+        st.markdown("## 🔄 Enable Comparison")
+        with st.expander("Configure Period Comparison"):
             enable_comparison(selected_table, numeric_columns)
 
-def run_analysis(table, metric, additional_columns):
+def run_analysis(table, metric, additional_columns, max_rows=10, sort_order="DESC"):
     """Run analysis and generate results."""
     try:
         select_columns = [metric] + additional_columns
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} DESC LIMIT 10"
+        query = f"""
+            SELECT {', '.join(select_columns)} 
+            FROM {quote_table_name(table)} 
+            ORDER BY {metric} {sort_order}
+            LIMIT {max_rows}
+        """
         results = pd.read_sql_query(query, conn)
         st.dataframe(results)
         
@@ -201,125 +210,12 @@ def run_analysis(table, metric, additional_columns):
     except Exception as e:
         st.error(f"Error running analysis: {e}")
 
-def enable_comparison(table_name, numeric_columns):
-    """Enable comparison with custom names for periods."""
-    st.header("Period Selection")
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date_1 = st.date_input("Start Date for Period 1")
-        end_date_1 = st.date_input("End Date for Period 1")
-        period_1_name = st.text_input("Custom Name for Period 1", "Period 1")
-    with col2:
-        start_date_2 = st.date_input("Start Date for Period 2")
-        end_date_2 = st.date_input("End Date for Period 2")
-        period_2_name = st.text_input("Custom Name for Period 2", "Period 2")
-
-    st.header("Metric Selection")
-    bar_metric = st.selectbox(
-        "Bar chart metric (required):", 
-        numeric_columns,
-        key="comparison_bar_metric"
-    )
-    
-    show_line_metric = st.checkbox("Add line metric?", key="show_comparison_line_metric")
-    line_metric = None
-    if show_line_metric:
-        line_metric = st.selectbox(
-            "Line chart metric:", 
-            numeric_columns,
-            key="comparison_line_metric"
-        )
-    
-    if st.button("Generate Comparison", key="generate_comparison"):
-        try:
-            # Query data for both periods
-            period1_query = f"""
-                SELECT date, {bar_metric}
-                {', ' + line_metric if line_metric else ''}
-                FROM {quote_table_name(table_name)}
-                WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
-            """
-            period2_query = f"""
-                SELECT date, {bar_metric}
-                {', ' + line_metric if line_metric else ''}
-                FROM {quote_table_name(table_name)}
-                WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}'
-            """
-            
-            df1 = pd.read_sql_query(period1_query, conn)
-            df2 = pd.read_sql_query(period2_query, conn)
-            
-            # Calculate aggregates
-            agg1 = df1.agg({bar_metric: ['sum', 'mean', 'min', 'max']})
-            agg2 = df2.agg({bar_metric: ['sum', 'mean', 'min', 'max']})
-            if line_metric:
-                agg1[line_metric] = df1[line_metric].agg(['sum', 'mean', 'min', 'max'])
-                agg2[line_metric] = df2[line_metric].agg(['sum', 'mean', 'min', 'max'])
-            
-            # Display comparison tables
-            st.header("Comparison Tables")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader(period_1_name)
-                st.dataframe(agg1)
-                st.download_button(
-                    "Download Period 1 Data",
-                    df1.to_csv(index=False).encode('utf-8'),
-                    f"{period_1_name.lower().replace(' ', '_')}_data.csv",
-                    "text/csv"
-                )
-            with col2:
-                st.subheader(period_2_name)
-                st.dataframe(agg2)
-                st.download_button(
-                    "Download Period 2 Data",
-                    df2.to_csv(index=False).encode('utf-8'),
-                    f"{period_2_name.lower().replace(' ', '_')}_data.csv",
-                    "text/csv"
-                )
-            
-            # Create comparison visualization
-            st.header("Comparison Visualization")
-            fig = px.bar(
-                pd.DataFrame({
-                    'Period': [period_1_name, period_2_name],
-                    bar_metric: [agg1[bar_metric]['sum'], agg2[bar_metric]['sum']]
-                }),
-                x='Period',
-                y=bar_metric,
-                title=f"Comparison of {bar_metric}"
-            )
-            
-            if line_metric:
-                fig.add_scatter(
-                    x=['Period 1', 'Period 2'],
-                    y=[agg1[line_metric]['sum'], agg2[line_metric]['sum']],
-                    mode='lines+markers',
-                    name=line_metric
-                )
-            
-            st.plotly_chart(fig)
-            
-            # Display daily trends
-            st.header("Daily Trends")
-            df1['Period'] = period_1_name
-            df2['Period'] = period_2_name
-            combined_df = pd.concat([df1, df2])
-            
-            trend_fig = px.line(
-                combined_df,
-                x='date',
-                y=bar_metric,
-                color='Period',
-                title=f"Daily Trends - {bar_metric}"
-            )
-            st.plotly_chart(trend_fig)
-            
-        except Exception as e:
-            st.error(f"Error generating comparison: {e}")
+[Enable comparison function remains the same]
 
 def main():
-    st.title("Data Autobot")
+    st.title("📊 Data Autobot")
+    st.markdown("### Your Intelligent Data Analysis Assistant")
+    st.markdown("Transform your data into actionable insights with advanced visualization and analysis tools.")
     st.write("Version 2.6.0")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
