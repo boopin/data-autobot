@@ -1,8 +1,9 @@
-# App Version: 3.2.1
+# App Version: 2.4.4
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
+import chardet  # For encoding detection
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -21,19 +22,33 @@ def generate_visualization(results, metric):
 
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file, sheet_name=None)
-    
-    if isinstance(df, dict):
-        st.write("Detected multiple sheets in the uploaded file.")
-        for sheet_name, sheet_df in df.items():
-            process_and_store(sheet_df, sheet_name)
-    else:
-        process_and_store(df, uploaded_file.name.split('.')[0])
+    try:
+        # Read file as bytes to detect encoding
+        raw_data = uploaded_file.read()
+        detected_encoding = chardet.detect(raw_data)["encoding"]
 
-    st.success("File successfully processed and saved to the database!")
+        # Rewind the file pointer after reading
+        uploaded_file.seek(0)
+
+        # Load the file based on its detected encoding
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, encoding=detected_encoding)
+        else:
+            df = pd.read_excel(uploaded_file, sheet_name=None)
+
+        # Process all sheets or a single DataFrame
+        if isinstance(df, dict):
+            st.write("Detected multiple sheets in the uploaded file.")
+            for sheet_name, sheet_df in df.items():
+                process_and_store(sheet_df, sheet_name)
+        else:
+            process_and_store(df, uploaded_file.name.split('.')[0])
+
+        st.success("File successfully processed and saved to the database!")
+    except UnicodeDecodeError as e:
+        st.error(f"Encoding error: {e}. Please upload a UTF-8 or properly encoded file.")
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
 
 def process_and_store(df, table_name):
     """Process the DataFrame and store it in the SQLite database with aggregations."""
@@ -81,7 +96,7 @@ def generate_analysis_ui():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"])
 
         with col2:
             additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
@@ -160,8 +175,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 
 def main():
     st.title("Data Autobot")
-    st.write("**Empowering Decisions, One Insight at a Time**")
-    st.write("**Version: 3.2.1**")
+    st.write("Version: 2.4.4")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
