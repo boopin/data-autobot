@@ -1,4 +1,4 @@
-# App Version: 2.6.2
+# App Version: 2.6.3
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -10,7 +10,7 @@ conn = sqlite3.connect(":memory:")
 # App Metadata
 APP_NAME = "Data Autobot"
 TAGLINE = "Unlock insights at the speed of thought!"
-VERSION = "2.6.2"
+VERSION = "2.6.3"
 
 
 def quote_table_name(table_name):
@@ -36,7 +36,7 @@ def generate_visualization(results, metric, optional_metric=None):
         )
 
         # Add line chart (optional)
-        if optional_metric:
+        if optional_metric and optional_metric in results.columns:
             fig.add_trace(
                 go.Scatter(
                     x=results[results.columns[0]],
@@ -52,7 +52,7 @@ def generate_visualization(results, metric, optional_metric=None):
             title=f"Visualization of {metric}" + (f" and {optional_metric}" if optional_metric else ""),
             xaxis_title="Date/Category",
             yaxis=dict(title=metric),
-            yaxis2=dict(title=optional_metric, overlaying="y", side="right"),
+            yaxis2=dict(title=optional_metric, overlaying="y", side="right") if optional_metric else None,
             legend=dict(x=0, y=1.2, orientation="h"),
         )
 
@@ -137,6 +137,7 @@ def generate_analysis_ui():
                 st.warning("Please select a metric to analyze.")
 
         generate_comparison_ui(selected_table)
+        generate_extended_visualization_ui(selected_table)
 
 
 def generate_comparison_ui(table_name):
@@ -168,6 +169,26 @@ def generate_comparison_ui(table_name):
             SELECT '{custom_name_2}' AS period, SUM({quote_column_name(metric_bar)}) AS {metric_bar}
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
+            """
+            results = pd.read_sql_query(query, conn)
+            st.dataframe(results)
+            generate_visualization(results, metric_bar, optional_metric=(metric_line if metric_line != "None" else None))
+
+
+def generate_extended_visualization_ui(table_name):
+    """Generate UI for extended visualization."""
+    with st.expander("Extended Visualization", expanded=False):
+        metric_bar = st.selectbox("Select metric for bar chart:", get_table_columns(table_name, exclude=["date"]), key="extended_metric_bar")
+        metric_line = st.selectbox("Select metric for line chart (optional):", ["None"] + get_table_columns(table_name, exclude=["date"]), key="extended_metric_line")
+        time_period = st.selectbox("Select time period:", ["week", "month", "quarter"], key="extended_time_period")
+
+        if st.button("Generate Extended Visualization", key="generate_extended"):
+            query = f"""
+            SELECT {time_period}, SUM({quote_column_name(metric_bar)}) AS {metric_bar}
+            {f", SUM({quote_column_name(metric_line)}) AS {metric_line}" if metric_line != "None" else ""}
+            FROM {quote_table_name(table_name)}
+            GROUP BY {time_period}
+            ORDER BY {time_period};
             """
             results = pd.read_sql_query(query, conn)
             st.dataframe(results)
