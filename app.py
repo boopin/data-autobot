@@ -1,4 +1,4 @@
-# App Version: 2.6.4
+# App Version: 2.6.5
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -37,7 +37,7 @@ def generate_combined_visualization(results, bar_metric, line_metric, title):
                     name=f"{bar_metric} (Bar)",
                 )
             )
-            if line_metric:
+            if line_metric and line_metric != "None":
                 fig.add_trace(
                     go.Scatter(
                         x=results.iloc[:, 0],
@@ -120,10 +120,14 @@ def save_aggregated_view(df, table_name, period_col, suffix):
         logger.error(f"Could not create aggregated table for '{suffix}': {e}")
         st.warning(f"Could not create aggregated table for '{suffix}': {e}")
 
-def execute_comparison_query(query, bar_metric, line_metric):
+def execute_comparison_query(query, bar_metric, line_metric, period_1_name, period_2_name):
     """Execute the comparison query and display results."""
     try:
         comparison_results = pd.read_sql_query(query, conn)
+
+        # Rename periods for user-friendly display
+        comparison_results.iloc[0, 0] = period_1_name
+        comparison_results.iloc[1, 0] = period_2_name
 
         # Calculate percentage change for the bar metric
         comparison_results["% Change"] = (
@@ -136,9 +140,14 @@ def execute_comparison_query(query, bar_metric, line_metric):
         st.write("Comparison Results:")
         st.dataframe(comparison_results)
 
+        # Visualization
         if st.checkbox("Generate Combined Visualization for Comparison"):
             generate_combined_visualization(
-                comparison_results, bar_metric, line_metric, "Comparison Results"
+                comparison_results, bar_metric, line_metric, f"Comparison: {period_1_name} vs {period_2_name}"
+            )
+        elif st.checkbox("Generate Single Metric Visualization"):
+            generate_combined_visualization(
+                comparison_results, bar_metric, None, f"Comparison: {period_1_name} vs {period_2_name} ({bar_metric})"
             )
     except Exception as e:
         logger.error(f"Error executing comparison query: {e}")
@@ -154,9 +163,11 @@ def generate_comparison_ui(table_name):
         with col1:
             start_date_1 = st.date_input("Start Date for Period 1")
             end_date_1 = st.date_input("End Date for Period 1")
+            period_1_name = st.text_input("Name for Period 1", value="Period 1")
         with col2:
             start_date_2 = st.date_input("Start Date for Period 2")
             end_date_2 = st.date_input("End Date for Period 2")
+            period_2_name = st.text_input("Name for Period 2", value="Period 2")
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
             metric_options = pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"].tolist()
@@ -173,7 +184,7 @@ def generate_comparison_ui(table_name):
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
-            execute_comparison_query(comparison_query, bar_metric, line_metric)
+            execute_comparison_query(comparison_query, bar_metric, line_metric, period_1_name, period_2_name)
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
@@ -236,7 +247,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.4")
+    st.write("**Version:** 2.6.5")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
