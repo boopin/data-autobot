@@ -32,12 +32,21 @@ def generate_combined_visualization(df, bar_metric, line_metric, x_column, title
 def generate_extended_visualization(table, bar_metric, line_metric, period_type):
     """Generate extended visualization for predefined time periods."""
     try:
+        # Generate combined query for all metrics
         query = f"SELECT {period_type}, SUM({bar_metric}) AS {bar_metric}"
         if line_metric:
             query += f", SUM({line_metric}) AS {line_metric}"
         query += f" FROM {quote_table_name(table)} GROUP BY {period_type} ORDER BY {period_type}"
         df = pd.read_sql_query(query, conn)
 
+        # Calculate additional statistics
+        stats_df = pd.DataFrame()
+        stats_df[f'{bar_metric}_stats'] = df[bar_metric].agg(['mean', 'min', 'max'])
+        if line_metric:
+            stats_df[f'{line_metric}_stats'] = df[line_metric].agg(['mean', 'min', 'max'])
+
+        # Display visualizations
+        st.header("Time Period Visualization")
         generate_combined_visualization(
             df,
             bar_metric,
@@ -45,6 +54,27 @@ def generate_extended_visualization(table, bar_metric, line_metric, period_type)
             period_type,
             f"{bar_metric} (Bar){' and ' + line_metric + ' (Line)' if line_metric else ''} Over {period_type.capitalize()}",
         )
+
+        # Display tables
+        st.header(f"{period_type.capitalize()} Breakdown")
+        st.subheader("Detailed Data")
+        st.dataframe(df)
+        st.download_button(
+            f"Download {period_type.capitalize()} Data",
+            df.to_csv(index=False).encode('utf-8'),
+            f"time_period_analysis.csv",
+            "text/csv"
+        )
+
+        st.subheader("Summary Statistics")
+        st.dataframe(stats_df)
+        st.download_button(
+            f"Download Summary Statistics",
+            stats_df.to_csv().encode('utf-8'),
+            f"summary_statistics.csv",
+            "text/csv"
+        )
+
     except Exception as e:
         st.error(f"Error generating extended visualization: {e}")
 
@@ -149,7 +179,6 @@ def generate_analysis_ui():
             )
             
             if st.button("Generate Extended Visualization", key="generate_extended"):
-                st.subheader("Time Period Visualization")
                 generate_extended_visualization(selected_table, bar_metric, line_metric, period_type)
                 
         with st.expander("Enable Comparison"):
