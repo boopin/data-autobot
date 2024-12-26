@@ -1,4 +1,4 @@
-# App Version: 2.6.0
+# App Version: 2.6.2
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -21,9 +21,10 @@ def generate_combined_visualization(df, bar_metric, line_metric, x_column, title
         fig = px.bar(
             df, x=x_column, y=bar_metric, title=title, labels={x_column: "Time Period"}
         )
-        fig.add_scatter(
-            x=df[x_column], y=df[line_metric], mode="lines+markers", name=line_metric
-        )
+        if line_metric:
+            fig.add_scatter(
+                x=df[x_column], y=df[line_metric], mode="lines+markers", name=line_metric
+            )
         st.plotly_chart(fig)
     except Exception as e:
         st.error(f"Error generating combined visualization: {e}")
@@ -31,16 +32,19 @@ def generate_combined_visualization(df, bar_metric, line_metric, x_column, title
 def generate_extended_visualization(table, bar_metric, line_metric, period_type):
     """Generate extended visualization for predefined time periods."""
     try:
-        query = f"SELECT {period_type}, SUM({bar_metric}) AS {bar_metric}, SUM({line_metric}) AS {line_metric} FROM {quote_table_name(table)} GROUP BY {period_type} ORDER BY {period_type}"
+        query = f"SELECT {period_type}, SUM({bar_metric}) AS {bar_metric}"
+        if line_metric:
+            query += f", SUM({line_metric}) AS {line_metric}"
+        query += f" FROM {quote_table_name(table)} GROUP BY {period_type} ORDER BY {period_type}"
+        
         df = pd.read_sql_query(query, conn)
 
-        generate_combined_visualization(
-            df,
-            bar_metric,
-            line_metric,
-            period_type,
-            f"{bar_metric} (Bar) and {line_metric} (Line) Over {period_type.capitalize()}",
-        )
+        title = f"{bar_metric} (Bar)"
+        if line_metric:
+            title += f" and {line_metric} (Line)"
+        title += f" Over {period_type.capitalize()}"
+
+        generate_combined_visualization(df, bar_metric, line_metric, period_type, title)
     except Exception as e:
         st.error(f"Error generating extended visualization: {e}")
 
@@ -111,7 +115,8 @@ def generate_analysis_ui():
 
         with st.expander("Generate Extended Time Period Visualization"):
             bar_metric = st.selectbox("Select metric for bar chart:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
-            line_metric = st.selectbox("Select metric for line chart:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+            line_metric = st.selectbox("Select metric for line chart (optional):", ["None"] + [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+            line_metric = None if line_metric == "None" else line_metric
             period_type = st.selectbox("Select time period:", ["week", "month", "quarter"])
 
             if st.button("Generate Extended Visualization"):
@@ -146,19 +151,17 @@ def enable_comparison(table_name):
     line_metric = st.selectbox("Select metric for line chart:", [])
     
     if st.button("Generate Combined Visualization"):
-        # Add combined chart generation logic
-        pass
-
+        pass  # Logic for comparison combined visualization
 
 def main():
     st.title("Data Autobot")
-    st.write("Version 2.6.0")
+    st.write("**Tagline:** Unlock insights at the speed of thought!")
+    st.write("**Version:** 2.6.2")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
     if uploaded_file:
         process_uploaded_file(uploaded_file)
         generate_analysis_ui()
-
 
 if __name__ == "__main__":
     main()
