@@ -1,4 +1,4 @@
-# App Version: 2.7.0
+# App Version: 2.7.1
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -29,16 +29,22 @@ def generate_individual_metric_analysis(table_name):
     st.subheader("Individual Metrics Analysis")
     metric = st.selectbox(
         "Select metric to analyze:",
-        get_table_columns(table_name, exclude=["date"]),
+        get_table_columns(table_name),
         key="individual_metric"
+    )
+    additional_columns = st.multiselect(
+        "Select additional columns to display:",
+        get_table_columns(table_name, exclude=[metric]),
+        key="additional_columns"
     )
     sort_order = st.radio("Sort order:", ["Highest", "Lowest"], index=0)
     row_limit = st.slider("Rows to display:", min_value=5, max_value=50, value=10)
 
     if st.button("Run Analysis", key="run_individual_analysis"):
+        select_columns = [quote_column_name(metric)] + [quote_column_name(col) for col in additional_columns]
         sort_clause = "DESC" if sort_order == "Highest" else "ASC"
         query = f"""
-        SELECT date, {quote_column_name(metric)}
+        SELECT {', '.join(select_columns)}
         FROM {quote_table_name(table_name)}
         ORDER BY {quote_column_name(metric)} {sort_clause}
         LIMIT {row_limit};
@@ -167,46 +173,10 @@ def generate_comparison_ui(table_name):
             st.dataframe(results)
             generate_visualization(results, metric_bar, optional_metric=(metric_line if metric_line != "None" else None))
 
-def generate_extended_visualization_ui(table_name):
-    """Generate UI for extended visualizations."""
-    st.header("Extended Visualization")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        metric_bar = st.selectbox(
-            "Select metric for bar chart:",
-            get_table_columns(table_name, exclude=["date"]),
-            key="extended_metric_bar"
-        )
-    with col2:
-        metric_line = st.selectbox(
-            "Select metric for line chart (optional):",
-            ["None"] + get_table_columns(table_name, exclude=["date"]),
-            key="extended_metric_line"
-        )
-    with col3:
-        time_period = st.selectbox(
-            "Select time period:",
-            ["week", "month", "quarter"],
-            key="extended_time_period"
-        )
-
-    if st.button("Generate Extended Visualization", key="generate_extended"):
-        query = f"""
-        SELECT {time_period} AS period, 
-               SUM({quote_column_name(metric_bar)}) AS {metric_bar}
-               {f", SUM({quote_column_name(metric_line)}) AS {metric_line}" if metric_line != "None" else ""}
-        FROM {quote_table_name(table_name)}
-        GROUP BY {time_period}
-        ORDER BY {time_period};
-        """
-        results = pd.read_sql_query(query, conn)
-        st.dataframe(results)
-        generate_visualization(results, metric_bar, optional_metric=(metric_line if metric_line != "None" else None))
-
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.7.0")
+    st.write("**Version:** 2.7.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
@@ -219,7 +189,6 @@ def main():
         if selected_table:
             generate_individual_metric_analysis(selected_table)
             generate_comparison_ui(selected_table)
-            generate_extended_visualization_ui(selected_table)
 
 if __name__ == "__main__":
     main()
