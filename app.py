@@ -21,27 +21,40 @@ def generate_visualization(results, metric):
 
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file, sheet_name=None)
-    
-    if isinstance(df, dict):
-        st.write("Detected multiple sheets in the uploaded file.")
-        for sheet_name, sheet_df in df.items():
-            process_and_store(sheet_df, sheet_name)
-    else:
-        process_and_store(df, uploaded_file.name.split('.')[0])
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            # Try reading with UTF-8 first, then fallback to other encodings
+            try:
+                df = pd.read_csv(uploaded_file)
+            except UnicodeDecodeError:
+                st.warning("File is not UTF-8 encoded. Attempting to detect encoding...")
+                import chardet
+                raw_data = uploaded_file.read()
+                detected_encoding = chardet.detect(raw_data)["encoding"]
+                st.info(f"Detected file encoding: {detected_encoding}")
+                uploaded_file.seek(0)  # Reset file pointer after reading
+                df = pd.read_csv(uploaded_file, encoding=detected_encoding)
+        else:
+            df = pd.read_excel(uploaded_file, sheet_name=None)
+        
+        if isinstance(df, dict):
+            st.write("Detected multiple sheets in the uploaded file.")
+            for sheet_name, sheet_df in df.items():
+                process_and_store(sheet_df, sheet_name)
+        else:
+            process_and_store(df, uploaded_file.name.split('.')[0])
 
-    st.success("File successfully processed and saved to the database!")
+        st.success("File successfully processed and saved to the database!")
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
 
 def process_and_store(df, table_name):
-    """Process the DataFrame and store it in the SQLite database."""
+    """Process the DataFrame and store it in the SQLite database with aggregations."""
     df.columns = [col.lower().strip().replace(" ", "_").replace("(", "").replace(")", "") for col in df.columns]
 
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df[df["date"].notnull()]  # Remove invalid dates
+        df = df[df["date"].notnull()]
         df["week"] = df["date"].dt.to_period("W").astype(str)
         df["month"] = df["date"].dt.to_period("M").astype(str)
         df["quarter"] = df["date"].dt.to_period("Q").astype(str)
@@ -81,7 +94,7 @@ def generate_analysis_ui():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col not in ["date", "week", "month", "quarter"]])
+            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"])
 
         with col2:
             additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
