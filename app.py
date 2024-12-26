@@ -1,8 +1,9 @@
-# App Version: 2.5.0
+# App Version: 2.5.1
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
+import chardet
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -23,17 +24,12 @@ def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
     try:
         if uploaded_file.name.endswith(".csv"):
-            # Try reading with UTF-8 first, then fallback to other encodings
-            try:
-                df = pd.read_csv(uploaded_file)
-            except UnicodeDecodeError:
-                st.warning("File is not UTF-8 encoded. Attempting to detect encoding...")
-                import chardet
-                raw_data = uploaded_file.read()
-                detected_encoding = chardet.detect(raw_data)["encoding"]
-                st.info(f"Detected file encoding: {detected_encoding}")
-                uploaded_file.seek(0)  # Reset file pointer after reading
-                df = pd.read_csv(uploaded_file, encoding=detected_encoding)
+            # Detect encoding using chardet
+            raw_data = uploaded_file.read()
+            detected_encoding = chardet.detect(raw_data)["encoding"]
+            st.info(f"Detected file encoding: {detected_encoding}")
+            uploaded_file.seek(0)  # Reset file pointer
+            df = pd.read_csv(uploaded_file, encoding=detected_encoding)
         else:
             df = pd.read_excel(uploaded_file, sheet_name=None)
         
@@ -45,6 +41,8 @@ def process_uploaded_file(uploaded_file):
             process_and_store(df, uploaded_file.name.split('.')[0])
 
         st.success("File successfully processed and saved to the database!")
+    except UnicodeDecodeError as e:
+        st.error(f"Error decoding file: {e}. Please upload a valid file.")
     except Exception as e:
         st.error(f"Error loading file: {e}")
 
@@ -127,11 +125,11 @@ def generate_comparison_ui(table_name):
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
             custom_query = f"""
-            SELECT 'Period 1' AS period, SUM(impressions_total) AS total
+            SELECT 'Period 1' AS period, SUM(primary) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
             UNION ALL
-            SELECT 'Period 2' AS period, SUM(impressions_total) AS total
+            SELECT 'Period 2' AS period, SUM(primary) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
@@ -173,7 +171,7 @@ def run_analysis(table, metric, additional_columns, sort_order, row_limit):
 
 def main():
     st.title("Data Autobot")
-    st.write("Version: 2.5.0")
+    st.write("Version: 2.5.1")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
