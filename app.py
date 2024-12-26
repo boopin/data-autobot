@@ -1,8 +1,8 @@
-# App Version: 2.5.1
+# App Version: 2.5.2
 import streamlit as st
 import pandas as pd
 import sqlite3
-import plotly.graph_objects as go
+import plotly.express as px
 
 # Configure SQLite connection
 conn = sqlite3.connect(":memory:")
@@ -11,59 +11,40 @@ def quote_table_name(table_name):
     """Properly quote table names for SQLite."""
     return f'"{table_name}"'
 
-def generate_visualization(results, metric, additional_metric=None):
+def quote_column_name(column_name):
+    """Properly quote column names for SQLite."""
+    return f'"{column_name}"'
+
+def generate_visualization(results, metric):
     """Generate visualization for results."""
     if not results.empty:
-        fig = go.Figure()
-
-        # Add primary metric as bars
-        fig.add_trace(
-            go.Bar(
-                x=results[results.columns[0]],
-                y=results[metric],
-                name=metric,
-                marker_color='blue'
-            )
-        )
-
-        # Add additional metric as a line if provided
-        if additional_metric:
-            fig.add_trace(
-                go.Scatter(
-                    x=results[results.columns[0]],
-                    y=results[additional_metric],
-                    name=additional_metric,
-                    mode='lines+markers',
-                    line=dict(color='orange')
-                )
-            )
-
-        fig.update_layout(
-            title=f"Comparison of {metric} and {additional_metric}" if additional_metric else f"Visualization of {metric}",
-            xaxis_title=results.columns[0],
-            yaxis_title="Values",
-            legend_title="Metrics",
-            barmode='group'
-        )
+        fig = px.bar(results, x=results.columns[0], y=metric, title=f"Visualization of {metric}")
         st.plotly_chart(fig)
     else:
         st.warning("No data available to generate visualization.")
 
 def process_uploaded_file(uploaded_file):
     """Process uploaded file and store it in the database."""
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file, sheet_name=None)
+    try:
+        # Detect encoding and read file
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, encoding="utf-8", engine="python", on_bad_lines="skip")
+        else:
+            df = pd.read_excel(uploaded_file, sheet_name=None)
+        
+        # Process multiple sheets or single DataFrame
+        if isinstance(df, dict):
+            st.write("Detected multiple sheets in the uploaded file.")
+            for sheet_name, sheet_df in df.items():
+                process_and_store(sheet_df, sheet_name)
+        else:
+            process_and_store(df, uploaded_file.name.split('.')[0])
 
-    if isinstance(df, dict):
-        st.write("Detected multiple sheets in the uploaded file.")
-        for sheet_name, sheet_df in df.items():
-            process_and_store(sheet_df, sheet_name)
-    else:
-        process_and_store(df, uploaded_file.name.split('.')[0])
-
-    st.success("File successfully processed and saved to the database!")
+        st.success("File successfully processed and saved to the database!")
+    except UnicodeDecodeError:
+        st.error("File encoding not supported. Please ensure the file is UTF-8 encoded.")
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
 
 def process_and_store(df, table_name):
     """Process the DataFrame and store it in the SQLite database with aggregations."""
@@ -111,10 +92,10 @@ def generate_analysis_ui():
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            selected_metric = st.selectbox("Select primary metric to analyze:", [col for col in columns if col != "date"])
+            selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"])
 
         with col2:
-            additional_metric = st.selectbox("Select secondary metric for visualization (optional):", ["None"] + [col for col in columns if col != "date"])
+            additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
 
         with col3:
             sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
@@ -122,7 +103,7 @@ def generate_analysis_ui():
 
         if st.button("Run Analysis"):
             if selected_metric:
-                run_analysis(selected_table, selected_metric, additional_metric, sort_order, row_limit)
+                run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
             else:
                 st.warning("Please select a metric to analyze.")
 
@@ -143,28 +124,26 @@ def generate_comparison_ui(table_name):
             end_date_2 = st.date_input("End Date for Period 2")
 
         if start_date_1 and end_date_1 and start_date_2 and end_date_2:
-            period_names = st.text_input("Enter names for periods (comma-separated, e.g., 'Q1 2024, Q2 2024')", value="Period 1, Period 2").split(",")
-            period_1, period_2 = period_names if len(period_names) == 2 else ["Period 1", "Period 2"]
-
-            custom_query = f"""
-            SELECT '{period_1.strip()}' AS period, SUM({quote_table_name('primary')}) AS total
+            metric = st.selectbox("Select metric for comparison:", [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"])
+            comparison_query = f"""
+            SELECT 'Period 1' AS period, SUM({quote_column_name(metric)}) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
             UNION ALL
-            SELECT '{period_2.strip()}' AS period, SUM({quote_table_name('primary')}) AS total
+            SELECT 'Period 2' AS period, SUM({quote_column_name(metric)}) AS total
             FROM {quote_table_name(table_name)}
             WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
             """
-            execute_comparison_query(custom_query, period_1, period_2)
+            execute_comparison_query(comparison_query)
 
-def execute_comparison_query(query, period_1, period_2):
+def execute_comparison_query(query):
     """Execute the comparison query and display results."""
     try:
         comparison_results = pd.read_sql_query(query, conn)
         comparison_results["% Change"] = (
             comparison_results["total"].pct_change().fillna(0) * 100
         ).round(2)
-        st.write(f"Comparison Results ({period_1.strip()} vs {period_2.strip()}):")
+        st.write("Comparison Results:")
         st.dataframe(comparison_results)
 
         if st.checkbox("Generate Visualization for Comparison"):
@@ -172,15 +151,12 @@ def execute_comparison_query(query, period_1, period_2):
     except Exception as e:
         st.error(f"Error executing comparison query: {e}")
 
-def run_analysis(table, metric, additional_metric, sort_order, row_limit):
+def run_analysis(table, metric, additional_columns, sort_order, row_limit):
     """Run the analysis and generate output."""
     try:
-        select_columns = [metric]
-        if additional_metric != "None":
-            select_columns.append(additional_metric)
-
+        select_columns = [quote_column_name(metric)] + [quote_column_name(col) for col in additional_columns]
         sort_clause = "DESC" if sort_order == "Highest" else "ASC"
-        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {metric} {sort_clause} LIMIT {row_limit}"
+        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {quote_column_name(metric)} {sort_clause} LIMIT {row_limit}"
 
         st.write("Generated Query:")
         st.code(query)
@@ -190,23 +166,20 @@ def run_analysis(table, metric, additional_metric, sort_order, row_limit):
         st.dataframe(results)
 
         if st.checkbox("Generate Visualization"):
-            generate_visualization(results, metric, additional_metric)
+            generate_visualization(results, metric)
     except Exception as e:
         st.error(f"Error executing query: {e}")
 
 def main():
     st.title("Data Autobot")
-    st.write("Your smart assistant for data analysis and visualization.")
-    st.write("Version: 2.5.1")
+    st.write("**Tagline:** Unlock insights at the speed of thought!")
+    st.write("**Version:** 2.5.2")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
     if uploaded_file:
-        try:
-            process_uploaded_file(uploaded_file)
-            generate_analysis_ui()
-        except Exception as e:
-            st.error(f"Error: {e}")
+        process_uploaded_file(uploaded_file)
+        generate_analysis_ui()
 
 if __name__ == "__main__":
     main()
