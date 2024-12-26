@@ -1,4 +1,4 @@
-# App Version: 2.6.2
+# App Version: 2.6.3
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -127,7 +127,7 @@ def execute_comparison_query(query, bar_metric, line_metric):
         # Calculate percentage change for the bar metric
         comparison_results["% Change"] = (
             comparison_results[bar_metric]
-            .pct_change(fill_method=None)  # Avoid deprecated fill method
+            .pct_change(fill_method=None)
             .fillna(0)
             * 100
         ).round(2)
@@ -143,44 +143,68 @@ def execute_comparison_query(query, bar_metric, line_metric):
         logger.error(f"Error executing comparison query: {e}")
         st.error(f"Error executing comparison query: {e}")
 
-def generate_comparison_ui(table_name):
-    """Generate UI for enabling and running comparisons."""
-    st.subheader("Enable Comparison")
-    enable_comparison = st.checkbox("Toggle Comparison")
+def generate_analysis_ui():
+    """Generate UI for data analysis."""
+    try:
+        tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
+        tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
 
-    if enable_comparison:
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date_1 = st.date_input("Start Date for Period 1")
-            end_date_1 = st.date_input("End Date for Period 1")
-        with col2:
-            start_date_2 = st.date_input("Start Date for Period 2")
-            end_date_2 = st.date_input("End Date for Period 2")
+        selected_table = st.selectbox("Select table to analyze:", tables)
 
-        if start_date_1 and end_date_1 and start_date_2 and end_date_2:
-            bar_metric = st.selectbox(
-                "Select bar metric for comparison:",
-                [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"],
-            )
-            line_metric = st.selectbox(
-                "Select line metric for comparison:",
-                [col for col in pd.read_sql_query(f"PRAGMA table_info({quote_table_name(table_name)})", conn)["name"] if col != "date"],
-            )
-            comparison_query = f"""
-            SELECT 'Period 1' AS period, SUM({quote_column_name(bar_metric)}) AS {bar_metric}, SUM({quote_column_name(line_metric)}) AS {line_metric}
-            FROM {quote_table_name(table_name)}
-            WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
-            UNION ALL
-            SELECT 'Period 2' AS period, SUM({quote_column_name(bar_metric)}) AS {bar_metric}, SUM({quote_column_name(line_metric)}) AS {line_metric}
-            FROM {quote_table_name(table_name)}
-            WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}';
-            """
-            execute_comparison_query(comparison_query, bar_metric, line_metric)
+        if selected_table:
+            columns_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
+            schema = pd.read_sql_query(columns_query, conn)
+            columns = schema["name"].tolist()
+
+            st.write(f"Schema for '{selected_table}': {columns}")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                selected_metric = st.selectbox("Select metric to analyze:", [col for col in columns if col != "date"])
+
+            with col2:
+                additional_columns = st.multiselect("Select additional columns:", [col for col in columns if col != selected_metric])
+
+            with col3:
+                sort_order = st.selectbox("Sort by:", ["Highest", "Lowest"])
+                row_limit = st.slider("Rows to display:", 5, 50, 10)
+
+            if st.button("Run Analysis"):
+                if selected_metric:
+                    run_analysis(selected_table, selected_metric, additional_columns, sort_order, row_limit)
+                else:
+                    st.warning("Please select a metric to analyze.")
+
+            generate_comparison_ui(selected_table)
+    except Exception as e:
+        logger.error(f"Error in generating analysis UI: {e}")
+        st.error(f"Error in generating analysis UI: {e}")
+
+def run_analysis(table, metric, additional_columns, sort_order, row_limit):
+    """Run the analysis and generate output."""
+    try:
+        select_columns = [quote_column_name(metric)] + [quote_column_name(col) for col in additional_columns]
+        sort_clause = "DESC" if sort_order == "Highest" else "ASC"
+        query = f"SELECT {', '.join(select_columns)} FROM {quote_table_name(table)} ORDER BY {quote_column_name(metric)} {sort_clause} LIMIT {row_limit}"
+
+        st.write("Generated Query:")
+        st.code(query)
+
+        results = pd.read_sql_query(query, conn)
+        st.write("Query Results:")
+        st.dataframe(results)
+
+        if st.checkbox("Generate Visualization"):
+            generate_combined_visualization(results, metric, None, f"Analysis of {metric}")
+    except Exception as e:
+        logger.error(f"Error executing query: {e}")
+        st.error(f"Error executing query: {e}")
 
 def main():
     st.title("Data Autobot")
     st.write("**Tagline:** Unlock insights at the speed of thought!")
-    st.write("**Version:** 2.6.2")
+    st.write("**Version:** 2.6.3")
 
     uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
