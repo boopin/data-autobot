@@ -30,21 +30,36 @@ def main():
 
         # Allow users to map columns dynamically
         st.write("### Column Mapping")
-        date_column = st.selectbox("Select the date column:", df.columns.tolist(), index=df.columns.tolist().index('date') if 'date' in df.columns else 0)
-        metric_column = st.selectbox("Select the metric column (e.g., impressions):", df.columns.tolist(), index=df.columns.tolist().index('impressions_total') if 'impressions_total' in df.columns else 0)
+        try:
+            date_column = st.selectbox("Select the date column:", df.columns.tolist(), index=df.columns.tolist().index('date') if 'date' in df.columns else 0)
+            metric_column = st.selectbox("Select the metric column (e.g., impressions):", df.columns.tolist(), index=df.columns.tolist().index('impressions_total') if 'impressions_total' in df.columns else 0)
+        except Exception as e:
+            st.error(f"Error in column selection: {e}")
+            return None
 
-        # Convert date column to datetime
-        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-        df = df.dropna(subset=[date_column])
+        # Validate date column
+        try:
+            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+            if df[date_column].isnull().all():
+                st.error(f"The selected column '{date_column}' cannot be converted to a valid datetime format.")
+                return None
+            df = df.dropna(subset=[date_column])
+        except Exception as e:
+            st.error(f"Error processing the date column: {e}")
+            return None
 
         # Rename selected columns to standard names for consistency
         df.rename(columns={date_column: 'date', metric_column: 'impressions_total'}, inplace=True)
 
         # Add derived columns
-        df['year'] = df['date'].dt.year.astype(str)
-        df['year_month'] = df['date'].dt.to_period("M").astype(str)
-        df['quarter'] = "Q" + df['date'].dt.quarter.astype(str) + " " + df['date'].dt.year.astype(str)
-        df['week'] = df['date'].dt.to_period("W-SUN").astype(str)
+        try:
+            df['year'] = df['date'].dt.year.astype(str)
+            df['year_month'] = df['date'].dt.to_period("M").astype(str)
+            df['quarter'] = "Q" + df['date'].dt.quarter.astype(str) + " " + df['date'].dt.year.astype(str)
+            df['week'] = df['date'].dt.to_period("W-SUN").astype(str)
+        except Exception as e:
+            st.error(f"Error adding derived columns: {e}")
+            return None
 
         # Save to SQLite
         df.to_sql("metrics", conn, index=False, if_exists="replace")
