@@ -5,10 +5,10 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 def main():
-    # App branding and title
+    # App Branding and Title
     st.set_page_config(page_title="Data Autobot (dBot)", layout="wide")
     st.title("Data Autobot (dBot)")
-    st.write("Version 2.6.0 - Your intelligent data analysis assistant")
+    st.write("Version 3.0.0 - Analyze your data efficiently with enhanced visualizations and comparisons")
 
     # SQLite setup
     conn = sqlite3.connect(":memory:")
@@ -28,28 +28,19 @@ def main():
         # Normalize column names
         df.columns = [c.lower().replace(' ', '_') for c in df.columns]
 
-        # Allow users to map columns dynamically
-        st.write("### Column Mapping")
-        date_column = st.selectbox("Select the date column:", df.columns.tolist(), index=0)
-        metric_column = st.selectbox("Select the metric column (e.g., impressions):", df.columns.tolist(), index=1)
+        # Validate required columns
+        if 'date' not in df.columns or 'impressions_total' not in df.columns:
+            st.error("The dataset must contain 'date' and 'impressions_total' columns.")
+            return None
 
         # Convert date column to datetime
         try:
-            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-            if df[date_column].isnull().all():
-                st.error(f"The selected column '{date_column}' cannot be converted to a valid datetime format.")
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            if df['date'].isnull().all():
+                st.error("The 'date' column contains no valid datetime values. Please ensure the column can be converted to a valid date.")
                 return None
-            df = df.dropna(subset=[date_column])
         except Exception as e:
-            st.error(f"Error processing the date column: {e}")
-            return None
-
-        # Rename selected columns to standard names for consistency
-        df.rename(columns={date_column: 'date', metric_column: 'impressions_total'}, inplace=True)
-
-        # Validate renamed columns
-        if 'date' not in df.columns or 'impressions_total' not in df.columns:
-            st.error("The dataset must contain valid 'date' and 'impressions_total' columns after mapping.")
+            st.error(f"Error processing the 'date' column: {e}")
             return None
 
         # Add derived columns
@@ -65,8 +56,7 @@ def main():
         # Save to SQLite
         df.to_sql("metrics", conn, index=False, if_exists="replace")
         return df
-
-    # File upload
+    # File Upload
     uploaded_file = st.file_uploader("Upload your dataset (CSV or Excel)", type=["csv", "xls", "xlsx"])
     if uploaded_file:
         st.write("Processing file...")
@@ -74,14 +64,15 @@ def main():
         if df is not None:
             st.success("File uploaded and processed successfully!")
             st.write("Preview of the dataset:")
-            st.dataframe(df.head())
+            max_rows = st.slider("Select number of rows to display:", min_value=1, max_value=len(df), value=5)
+            st.dataframe(df.head(max_rows))
 
-            # Debugging: Display schema
+            # Debugging Information
             st.write("### Debugging Information")
             st.write("Columns in the dataset:", df.columns.tolist())
 
             # Feature: Custom Period Comparison
-            st.write("### Compare Custom Periods")
+            st.write("## Enable Comparison")
             col1, col2 = st.columns(2)
             with col1:
                 period1_name = st.text_input("Custom Name for Period 1", "Period 1")
@@ -90,7 +81,7 @@ def main():
                 period2_name = st.text_input("Custom Name for Period 2", "Period 2")
                 period2_filter = st.date_input("Start and End Date for Period 2", [])
 
-            # Generate comparison data
+            # Generate Comparison Data
             if len(period1_filter) == 2 and len(period2_filter) == 2:
                 period1_data = df[(df['date'] >= pd.Timestamp(period1_filter[0])) & (df['date'] <= pd.Timestamp(period1_filter[1]))]
                 period2_data = df[(df['date'] >= pd.Timestamp(period2_filter[0])) & (df['date'] <= pd.Timestamp(period2_filter[1]))]
@@ -102,13 +93,14 @@ def main():
                     "% Change": [(period2_data['impressions_total'].sum() - period1_data['impressions_total'].sum()) / period1_data['impressions_total'].sum() * 100]
                 })
                 st.write("Comparison Results")
-                st.dataframe(comparison_result)
+                st.dataframe(comparison_result.sort_values(by=comparison_result.columns[1], ascending=False))
                 st.download_button("Download Comparison Data", comparison_result.to_csv(index=False).encode('utf-8'), "comparison_data.csv")
 
-                # Visualization of comparison
+                # Visualization of Comparison
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=[period1_name, period2_name], y=comparison_result.iloc[0, 1:3], name="Total Impressions"))
                 fig.add_trace(go.Scatter(x=[period1_name, period2_name], y=comparison_result["% Change"], mode="lines+markers", name="% Change", yaxis="y2"))
+                fig.update_traces(marker_size=10, line_width=3)
                 fig.update_layout(
                     title="Custom Period Comparison",
                     xaxis_title="Periods",
@@ -117,11 +109,11 @@ def main():
                     hovermode="x unified"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
-            # Timeframe selection dropdown
+            # Timeframe Selection
+            st.write("## Generate Extended Time Period Visualization")
             timeframe = st.selectbox("Select a timeframe to visualize:", ["Yearly", "Quarterly", "Monthly", "Weekly"])
 
-            # Query and visualization logic based on the selected timeframe
+            # Query and Visualization Logic
             if timeframe == "Yearly":
                 yearly_query = """
                     SELECT year, SUM(impressions_total) AS total_impressions
@@ -174,4 +166,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
