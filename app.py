@@ -28,28 +28,20 @@ def main():
         # Normalize column names
         df.columns = [c.lower().replace(' ', '_') for c in df.columns]
 
-        # Allow users to map columns dynamically
-        st.write("### Column Mapping")
-        try:
-            date_column = st.selectbox("Select the date column:", df.columns.tolist(), index=df.columns.tolist().index('date') if 'date' in df.columns else 0)
-            metric_column = st.selectbox("Select the metric column (e.g., impressions):", df.columns.tolist(), index=df.columns.tolist().index('impressions_total') if 'impressions_total' in df.columns else 0)
-        except Exception as e:
-            st.error(f"Error in column selection: {e}")
+        # Validate required columns
+        if 'date' not in df.columns or 'impressions_total' not in df.columns:
+            st.error("The dataset must contain 'date' and 'impressions_total' columns.")
             return None
 
-        # Validate date column
+        # Convert date column to datetime
         try:
-            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-            if df[date_column].isnull().all():
-                st.error(f"The selected column '{date_column}' cannot be converted to a valid datetime format.")
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            if df['date'].isnull().all():
+                st.error("The 'date' column contains no valid datetime values. Please ensure the column can be converted to a valid date.")
                 return None
-            df = df.dropna(subset=[date_column])
         except Exception as e:
-            st.error(f"Error processing the date column: {e}")
+            st.error(f"Error processing the 'date' column: {e}")
             return None
-
-        # Rename selected columns to standard names for consistency
-        df.rename(columns={date_column: 'date', metric_column: 'impressions_total'}, inplace=True)
 
         # Add derived columns
         try:
