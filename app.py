@@ -1,4 +1,6 @@
-# App Version: 2.6.1
+# Part 1: Basic Setup and Data Processing
+# App Version: 2.7.0
+
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -93,7 +95,7 @@ def save_aggregated_view(df, table_name, period_col, suffix):
     except Exception as e:
         st.warning(f"Could not create aggregated table for '{suffix}': {e}")
 # Part 2: Analysis and Visualization Components
-# App Version: 2.6.1
+# App Version: 2.7.0
 
 def generate_analysis_ui():
     """Generate UI for data analysis."""
@@ -139,7 +141,12 @@ def generate_analysis_ui():
             run_analysis(selected_table, selected_metric, additional_columns, num_rows, sort_order)
             
         st.markdown("---")
-        with st.expander("🚀 Extended Time Period Visualization"):
+        
+        # Enhanced section headers with bigger fonts and emphasis
+        st.markdown("## 🚀 Extended Time Period Visualization")
+        st.markdown("*Analyze trends across different time periods*")
+        
+        with st.expander("View Extended Time Period Analysis", expanded=True):
             st.header("Time Period Analysis")
             bar_metric = st.selectbox(
                 "Bar chart metric (required):", 
@@ -166,7 +173,11 @@ def generate_analysis_ui():
                 generate_extended_visualization(selected_table, bar_metric, line_metric, period_type)
         
         st.markdown("---")
-        with st.expander("🔄 Period Comparison Analysis"):
+        
+        st.markdown("## 🔄 Period Comparison Analysis")
+        st.markdown("*Compare metrics between different time periods*")
+        
+        with st.expander("View Period Comparison Analysis", expanded=True):
             enable_comparison(selected_table, numeric_columns)
 
 def run_analysis(table, metric, additional_columns, num_rows, sort_order):
@@ -182,26 +193,37 @@ def run_analysis(table, metric, additional_columns, num_rows, sort_order):
         """
         results = pd.read_sql_query(query, conn)
         
-        # Display results with formatting
-        st.dataframe(
-            results.style.highlight_max(axis=0, color='lightgreen')
-                    .highlight_min(axis=0, color='lightcoral'),
-            use_container_width=True
+        # Display results
+        st.dataframe(results, use_container_width=True)
+        
+        # Generate visualization for the results
+        st.subheader("📈 Metric Visualization")
+        fig = px.bar(
+            results,
+            x=results.index,
+            y=metric,
+            title=f"{metric} Distribution",
+            labels={'index': 'Row', metric: metric}
         )
+        
+        # Add line for average
+        fig.add_hline(
+            y=results[metric].mean(),
+            line_dash="dash",
+            line_color="red",
+            annotation_text=f"Average: {results[metric].mean():.2f}"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
         
         # Add download button
         st.download_button(
-            "📥 Download Analysis Results",
+            "📥 Download Results",
             results.to_csv(index=False).encode('utf-8'),
             "analysis_results.csv",
             "text/csv",
             key='download_analysis'
         )
-        
-        # Display summary statistics
-        st.subheader("📊 Summary Statistics")
-        summary_stats = results.describe()
-        st.dataframe(summary_stats, use_container_width=True)
         
     except Exception as e:
         st.error(f"Error running analysis: {e}")
@@ -216,13 +238,7 @@ def generate_extended_visualization(table, bar_metric, line_metric, period_type)
         query += f" FROM {quote_table_name(table)} GROUP BY {period_type} ORDER BY {period_type}"
         df = pd.read_sql_query(query, conn)
 
-        # Calculate additional statistics
-        stats_df = pd.DataFrame()
-        stats_df[f'{bar_metric}_stats'] = df[bar_metric].agg(['mean', 'min', 'max'])
-        if line_metric:
-            stats_df[f'{line_metric}_stats'] = df[line_metric].agg(['mean', 'min', 'max'])
-
-        # Display visualizations with enhanced styling
+        # Display visualization
         st.header("📈 Time Period Visualization")
         fig = px.bar(
             df,
@@ -257,36 +273,26 @@ def generate_extended_visualization(table, bar_metric, line_metric, period_type)
         # Make chart responsive
         st.plotly_chart(fig, use_container_width=True)
 
-        # Display tables with enhanced formatting
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📋 Detailed Data")
-            st.dataframe(df, use_container_width=True)
-            st.download_button(
-                "📥 Download Detailed Data",
-                df.to_csv(index=False).encode('utf-8'),
-                f"time_period_analysis.csv",
-                "text/csv"
-            )
-            
-        with col2:
-            st.subheader("📊 Summary Statistics")
-            st.dataframe(stats_df, use_container_width=True)
-            st.download_button(
-                "📥 Download Summary Statistics",
-                stats_df.to_csv().encode('utf-8'),
-                f"summary_statistics.csv",
-                "text/csv"
-            )
+        # Display data table
+        st.subheader("📋 Data Table")
+        st.dataframe(df, use_container_width=True)
+        st.download_button(
+            "📥 Download Data",
+            df.to_csv(index=False).encode('utf-8'),
+            f"time_period_analysis.csv",
+            "text/csv"
+        )
 
     except Exception as e:
-        st.error(f"Error generating extended visualization: {e}")
+        st.error(f"Error generating visualization: {e}")
 # Part 3: Comparison and Main Components
-# App Version: 2.6.1
+# App Version: 2.7.0
 
 def enable_comparison(table_name, numeric_columns):
-    """Enable comparison with custom names for periods and enhanced visualization."""
+    """Enable comparison with custom names for periods."""
+    st.markdown("## 🔄 Period Comparison Analysis")
+    st.markdown("*Compare and analyze metrics across different time periods*")
+    
     st.header("📅 Period Selection")
     col1, col2 = st.columns(2)
     with col1:
@@ -320,70 +326,97 @@ def enable_comparison(table_name, numeric_columns):
         try:
             # Query data for both periods
             period1_query = f"""
-                SELECT date, {bar_metric}
-                {', ' + line_metric if line_metric else ''}
+                SELECT 
+                    SUM({bar_metric}) as total_{bar_metric}
+                    {', SUM(' + line_metric + ') as total_' + line_metric if line_metric else ''}
                 FROM {quote_table_name(table_name)}
                 WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
             """
             period2_query = f"""
-                SELECT date, {bar_metric}
-                {', ' + line_metric if line_metric else ''}
+                SELECT 
+                    SUM({bar_metric}) as total_{bar_metric}
+                    {', SUM(' + line_metric + ') as total_' + line_metric if line_metric else ''}
                 FROM {quote_table_name(table_name)}
                 WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}'
             """
             
-            df1 = pd.read_sql_query(period1_query, conn)
-            df2 = pd.read_sql_query(period2_query, conn)
+            df1_total = pd.read_sql_query(period1_query, conn)
+            df2_total = pd.read_sql_query(period2_query, conn)
             
-            # Calculate aggregates with enhanced metrics
-            agg1 = df1.agg({bar_metric: ['sum', 'mean', 'min', 'max', 'std']})
-            agg2 = df2.agg({bar_metric: ['sum', 'mean', 'min', 'max', 'std']})
+            # Calculate percentage changes
+            comparison_data = {
+                'Metric': [bar_metric],
+                f'{period_1_name} Total': [df1_total[f'total_{bar_metric}'].iloc[0]],
+                f'{period_2_name} Total': [df2_total[f'total_{bar_metric}'].iloc[0]]
+            }
+            
             if line_metric:
-                agg1[line_metric] = df1[line_metric].agg(['sum', 'mean', 'min', 'max', 'std'])
-                agg2[line_metric] = df2[line_metric].agg(['sum', 'mean', 'min', 'max', 'std'])
+                comparison_data['Metric'].append(line_metric)
+                comparison_data[f'{period_1_name} Total'].append(df1_total[f'total_{line_metric}'].iloc[0])
+                comparison_data[f'{period_2_name} Total'].append(df2_total[f'total_{line_metric}'].iloc[0])
             
-            # Display comparison tables with enhanced formatting
-            st.header("📊 Comparison Tables")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader(f"📈 {period_1_name}")
-                st.dataframe(agg1.style.highlight_max(axis=1), use_container_width=True)
-                st.download_button(
-                    "📥 Download Period 1 Data",
-                    df1.to_csv(index=False).encode('utf-8'),
-                    f"{period_1_name.lower().replace(' ', '_')}_data.csv",
-                    "text/csv"
-                )
-            with col2:
-                st.subheader(f"📈 {period_2_name}")
-                st.dataframe(agg2.style.highlight_max(axis=1), use_container_width=True)
-                st.download_button(
-                    "📥 Download Period 2 Data",
-                    df2.to_csv(index=False).encode('utf-8'),
-                    f"{period_2_name.lower().replace(' ', '_')}_data.csv",
-                    "text/csv"
-                )
+            comparison_df = pd.DataFrame(comparison_data)
+            comparison_df['Change'] = (
+                (comparison_df[f'{period_2_name} Total'] - comparison_df[f'{period_1_name} Total']) /
+                comparison_df[f'{period_1_name} Total'] * 100
+            ).round(2)
+            comparison_df['Change'] = comparison_df['Change'].apply(lambda x: f"{x:+.2f}%")
             
-            # Create enhanced comparison visualization
-            st.header("📊 Comparison Visualization")
-            fig = px.bar(
-                pd.DataFrame({
-                    'Period': [period_1_name, period_2_name],
-                    bar_metric: [agg1[bar_metric]['sum'], agg2[bar_metric]['sum']]
-                }),
-                x='Period',
-                y=bar_metric,
-                title=f"Comparison of {bar_metric}"
+            # Display comparison table
+            st.header("📊 Period Comparison Summary")
+            st.dataframe(comparison_df, use_container_width=True)
+            
+            # Download buttons for comparison data
+            st.download_button(
+                "📥 Download Comparison Summary",
+                comparison_df.to_csv(index=False).encode('utf-8'),
+                "period_comparison_summary.csv",
+                "text/csv"
             )
             
+            # Create comparison visualization
+            st.header("📊 Comparison Visualization")
+            
+            # Prepare data for visualization
+            viz_data = []
+            for metric in comparison_df['Metric']:
+                viz_data.extend([
+                    {
+                        'Period': period_1_name,
+                        'Metric': metric,
+                        'Value': comparison_df[comparison_df['Metric'] == metric][f'{period_1_name} Total'].iloc[0]
+                    },
+                    {
+                        'Period': period_2_name,
+                        'Metric': metric,
+                        'Value': comparison_df[comparison_df['Metric'] == metric][f'{period_2_name} Total'].iloc[0]
+                    }
+                ])
+            
+            viz_df = pd.DataFrame(viz_data)
+            
+            # Create bar chart
+            fig = px.bar(
+                viz_df[viz_df['Metric'] == bar_metric],
+                x='Period',
+                y='Value',
+                title=f"Comparison of Total {bar_metric}",
+                text=viz_df[viz_df['Metric'] == bar_metric]['Value'].round(2)
+            )
+            
+            fig.update_traces(textposition='outside')
+            
             if line_metric:
+                line_data = viz_df[viz_df['Metric'] == line_metric]
                 fig.add_scatter(
-                    x=[period_1_name, period_2_name],
-                    y=[agg1[line_metric]['sum'], agg2[line_metric]['sum']],
-                    mode='lines+markers',
+                    x=line_data['Period'],
+                    y=line_data['Value'],
+                    mode='lines+markers+text',
                     name=line_metric,
                     line=dict(width=3),
                     marker=dict(size=8),
+                    text=line_data['Value'].round(2),
+                    textposition='top center',
                     yaxis="y2"
                 )
                 
@@ -398,8 +431,25 @@ def enable_comparison(table_name, numeric_columns):
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Display enhanced daily trends
-            st.header("📈 Daily Trends")
+            # Get daily data for trends
+            daily_query1 = f"""
+                SELECT date, {bar_metric}
+                {', ' + line_metric if line_metric else ''}
+                FROM {quote_table_name(table_name)}
+                WHERE date BETWEEN '{start_date_1}' AND '{end_date_1}'
+            """
+            daily_query2 = f"""
+                SELECT date, {bar_metric}
+                {', ' + line_metric if line_metric else ''}
+                FROM {quote_table_name(table_name)}
+                WHERE date BETWEEN '{start_date_2}' AND '{end_date_2}'
+            """
+            
+            df1 = pd.read_sql_query(daily_query1, conn)
+            df2 = pd.read_sql_query(daily_query2, conn)
+            
+            # Display daily trends
+            st.header("📈 Daily Trends Analysis")
             df1['Period'] = period_1_name
             df2['Period'] = period_2_name
             combined_df = pd.concat([df1, df2])
@@ -439,7 +489,7 @@ def main():
     
     st.title("📊 Data Autobot - Your Intelligent Analytics Assistant")
     st.markdown("*Empowering Data-Driven Decisions*")
-    st.markdown("Version 2.6.1")
+    st.markdown("Version 2.7.0")
     st.markdown("---")
 
     uploaded_file = st.file_uploader("📂 Upload your Excel or CSV file", type=["csv", "xlsx"])
