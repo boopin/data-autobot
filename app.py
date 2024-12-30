@@ -17,43 +17,6 @@ def quote_column_name(column_name):
     """Properly quote column names for SQLite."""
     return f'"{column_name}"'
 
-def generate_metric_visualization(df, metric, additional_columns):
-    """Generate visualization for metric analysis."""
-    try:
-        # Create bar chart for the primary metric
-        fig = px.bar(
-            df,
-            y=metric,
-            title=f"{metric} Distribution",
-            labels={metric: metric}
-        )
-        
-        # Add line for each additional numeric column
-        for col in additional_columns:
-            if col not in ['date', 'week', 'month', 'quarter'] and df[col].dtype in ['int64', 'float64']:
-                fig.add_scatter(
-                    y=df[col],
-                    mode="lines+markers",
-                    name=col,
-                    line=dict(width=3),
-                    marker=dict(size=8),
-                    yaxis="y2"
-                )
-        
-        if any(col for col in additional_columns if col not in ['date', 'week', 'month', 'quarter']):
-            fig.update_layout(
-                yaxis2=dict(
-                    overlaying="y",
-                    side="right",
-                    title="Additional Metrics"
-                ),
-                yaxis_title=metric
-            )
-        
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"Error generating metric visualization: {e}")
-
 def generate_combined_visualization(df, bar_metric, line_metric, x_column, title):
     """Generate combined bar and line visualization."""
     try:
@@ -69,9 +32,9 @@ def generate_combined_visualization(df, bar_metric, line_metric, x_column, title
                 y=df[line_metric],
                 mode="lines+markers",
                 name=line_metric,
-                line=dict(width=3),
-                marker=dict(size=8),
-                yaxis="y2"
+                line=dict(width=3),  # Increased line width
+                marker=dict(size=8),  # Increased marker size
+                yaxis="y2"  # Use secondary y-axis for better visibility
             )
             
             # Update layout for secondary y-axis
@@ -102,7 +65,7 @@ def process_uploaded_file(uploaded_file):
         else:
             process_and_store(df, uploaded_file.name.split('.')[0])
 
-        st.success("File successfully processed!")
+        st.success("File successfully processed and saved to the database!")
     except Exception as e:
         st.error(f"Error loading file: {e}")
 
@@ -131,85 +94,6 @@ def save_aggregated_view(df, table_name, period_col, suffix):
             agg_df.to_sql(agg_table_name, conn, if_exists="replace", index=False)
     except Exception as e:
         st.warning(f"Could not create aggregated table for '{suffix}': {e}")
-
-def generate_analysis_ui():
-    """Generate UI for data analysis."""
-    st.header("📊 Data Analysis")
-    st.markdown("---")
-    
-    tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
-    tables = pd.read_sql_query(tables_query, conn)["name"].tolist()
-    selected_table = st.selectbox("Select table to analyze:", tables, key="table_select")
-    
-    if selected_table:
-        columns_query = f"PRAGMA table_info({quote_table_name(selected_table)});"
-        schema = pd.read_sql_query(columns_query, conn)
-        columns = schema["name"].tolist()
-        
-        numeric_columns = [col for col in columns if col not in ["date", "week", "month", "quarter"]]
-        
-        st.subheader("📈 Metric Selection")
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_metric = st.selectbox(
-                "Primary metric for analysis:", 
-                numeric_columns,
-                key="primary_metric"
-            )
-        with col2:
-            additional_columns = st.multiselect(
-                "Additional columns for analysis:", 
-                [col for col in columns if col != selected_metric],
-                key="additional_cols"
-            )
-        
-        # Row control and sorting options
-        st.subheader("⚙️ Display Options")
-        col3, col4 = st.columns(2)
-        with col3:
-            num_rows = st.slider("Number of rows to display:", 1, 100, 10)
-        with col4:
-            sort_order = st.radio("Sort order:", ["High to Low", "Low to High"])
-            
-        if st.button("Run Analysis", key="run_analysis"):
-            st.subheader("📊 Analysis Results")
-            results_df = run_analysis(selected_table, selected_metric, additional_columns, num_rows, sort_order)
-            if results_df is not None:
-                generate_metric_visualization(results_df, selected_metric, additional_columns)
-            
-        st.markdown("---")
-        st.markdown("## 🚀 Extended Time Period Visualization")
-        st.markdown("---")
-        with st.expander("Generate Extended Time Period Analysis", expanded=True):
-            bar_metric = st.selectbox(
-                "Bar chart metric (required):", 
-                numeric_columns,
-                key="extended_bar_metric"
-            )
-            
-            show_line_metric = st.checkbox("Add line metric?", key="show_extended_line_metric")
-            line_metric = None
-            if show_line_metric:
-                line_metric = st.selectbox(
-                    "Line chart metric:", 
-                    numeric_columns,
-                    key="extended_line_metric"
-                )
-                
-            period_type = st.selectbox(
-                "Time period:", 
-                ["week", "month", "quarter"],
-                key="extended_period_type"
-            )
-            
-            if st.button("Generate Extended Visualization", key="generate_extended"):
-                generate_extended_visualization(selected_table, bar_metric, line_metric, period_type)
-        
-        st.markdown("---")
-        st.markdown("## 🔄 Period Comparison Analysis")
-        st.markdown("---")
-        with st.expander("Generate Period Comparison", expanded=True):
-            enable_comparison(selected_table, numeric_columns)
 # Part 2: Analysis and Visualization Components
 # App Version: 2.6.1
 
